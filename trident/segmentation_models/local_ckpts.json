@@ -1,5 +1,5 @@
 {
-    "hest": "/mnt/raid/zanzhuheng/working/sheep/TRIDENT-main/weights/deeplabv3_seg_v4.ckpt",
+    "hest": "",
     "grandqc": "",
     "grandqc_artifact": ""
 }

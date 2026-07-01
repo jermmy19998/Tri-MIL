@@ -1,6 +1,8 @@
 from __future__ import annotations
 import os
 import sys
+import time
+from contextlib import ExitStack
 from tqdm import tqdm
 from typing import Optional, List, Dict, Any
 from inspect import signature
@@ -8,9 +10,16 @@ import geopandas as gpd
 import pandas as pd 
 
 from trident import load_wsi, WSIReaderType
-from trident.IO import create_lock, remove_lock, is_locked, update_log, collect_valid_slides
+from trident.IO import create_lock, remove_lock, is_locked, update_log, collect_valid_slides, splitext
+from trident.State import make_slide_ref, make_attempt, update_task_state
 from trident.Maintenance import deprecated
-from trident.wsi_objects.WSIFactory import OPENSLIDE_EXTENSIONS, PIL_EXTENSIONS, SDPC_EXTENSIONS
+from trident.wsi_objects.WSIFactory import (
+    OPENSLIDE_EXTENSIONS,
+    PIL_EXTENSIONS,
+    SDPC_EXTENSIONS,
+    OMEZARR_EXTENSIONS,
+    CZI_EXTENSIONS,
+)
 
 
 class Processor:
@@ -28,6 +37,7 @@ class Processor:
         max_workers: Optional[int] = None,
         reader_type: Optional[WSIReaderType] = None,
         search_nested: bool = False, 
+        selected_wsi_paths: Optional[List[str]] = None,
     ) -> None:
         """
         The `Processor` class handles all preprocessing steps starting from whole-slide images (WSIs). 
@@ -73,7 +83,7 @@ class Processor:
                 Maximum number of workers for data loading. If None, the default behavior will be used.
                 Defaults to None.
             reader_type (WSIReaderType, optional):
-                Force the image reader engine to use. Options are are ["openslide", "image", "cucim"]. Defaults to None
+                Force the image reader engine to use. Options are are ["openslide", "image", "cucim", "sdpc", "omezarr"]. Defaults to None
                 (auto-determine the right engine based on image extension).
             search_nested (bool, optional):  
                 If True, the processor will recursively search for WSIs within all subdirectories of `wsi_source`.
@@ -82,6 +92,9 @@ class Processor:
                 the filename (excluding directory structure) will be used for downstream outputs (e.g., segmentation filenames).  
                 If False, only files directly inside `wsi_source` will be considered.  
                 Defaults to False.
+            selected_wsi_paths (List[str], optional):
+                Optional explicit list of slide paths to process. When provided, slide discovery is
+                skipped and only these slides are loaded. Defaults to None.
 
 
         Returns:
@@ -107,7 +120,13 @@ class Processor:
 
         self.job_dir = job_dir
         self.wsi_source = wsi_source
-        self.wsi_ext = wsi_ext or (list(PIL_EXTENSIONS) + list(OPENSLIDE_EXTENSIONS) + list(SDPC_EXTENSIONS))
+        self.wsi_ext = wsi_ext or (
+            list(PIL_EXTENSIONS)
+            + list(OPENSLIDE_EXTENSIONS)
+            + list(SDPC_EXTENSIONS)
+            + list(OMEZARR_EXTENSIONS)
+            + list(CZI_EXTENSIONS)
+        )
         self.skip_errors = skip_errors
         self.custom_mpp_keys = custom_mpp_keys
         self.max_workers = max_workers
@@ -118,24 +137,45 @@ class Processor:
             assert ext.startswith('.'), f'Invalid extension: {ext} (must start with a period)'
 
         # === Collect slide paths and relative paths ===
-        full_paths, rel_paths = collect_valid_slides(
-            wsi_dir=wsi_source,
-            custom_list_path=custom_list_of_wsis,
-            wsi_ext=self.wsi_ext,
-            search_nested=search_nested,
-            max_workers=max_workers,
-            return_relative_paths=True
-        )
+        if selected_wsi_paths is not None:
+            full_paths = [os.path.abspath(path) for path in selected_wsi_paths]
+            rel_paths = []
+            for path in full_paths:
+                try:
+                    rel_paths.append(os.path.relpath(path, wsi_source))
+                except ValueError:
+                    rel_paths.append(os.path.basename(path))
+        else:
+            full_paths, rel_paths = collect_valid_slides(
+                wsi_dir=wsi_source,
+                custom_list_path=custom_list_of_wsis,
+                wsi_ext=self.wsi_ext,
+                search_nested=search_nested,
+                max_workers=max_workers,
+                return_relative_paths=True
+            )
 
         self.wsi_rel_paths = rel_paths if custom_list_of_wsis else None
 
         # === Extract mpp column if provided ===
         if custom_list_of_wsis is not None:
             wsi_df = pd.read_csv(custom_list_of_wsis)
-            valid_mpps = (
-                wsi_df['mpp'].dropna().tolist()
-                if 'mpp' in wsi_df.columns else None
-            )
+
+            if 'mpp' in wsi_df.columns:
+                raw_mpps = [None if pd.isna(value) else value for value in wsi_df['mpp'].tolist()]
+
+                if 'wsi' in wsi_df.columns:
+                    rel_to_mpp = {
+                        rel_path: mpp
+                        for rel_path, mpp in zip(wsi_df['wsi'].astype(str).tolist(), raw_mpps)
+                    }
+                    valid_mpps = [rel_to_mpp.get(rel_path) for rel_path in rel_paths]
+                elif len(raw_mpps) == len(full_paths):
+                    valid_mpps = raw_mpps
+                else:
+                    valid_mpps = None
+            else:
+                valid_mpps = None
         else:
             valid_mpps = None
 
@@ -143,25 +183,75 @@ class Processor:
 
         # === Initialize WSIs ===
         self.wsis = []
-        for wsi_idx, abs_path in enumerate(full_paths):
-            name = os.path.basename(abs_path)
-            tissue_seg_path = os.path.join(
-                self.job_dir, 'contours_geojson',
-                f'{os.path.splitext(name)[0]}.geojson'
-            )
-            if not os.path.exists(tissue_seg_path):
-                tissue_seg_path = None
+        stack = ExitStack()
+        try:
+            for wsi_idx, abs_path in enumerate(full_paths):
+                name = os.path.basename(abs_path)
+                tissue_seg_path = os.path.join(
+                    self.job_dir, 'contours_geojson',
+                    f'{splitext(name)[0]}.geojson'
+                )
+                if not os.path.exists(tissue_seg_path):
+                    tissue_seg_path = None
 
-            slide = load_wsi(
-                slide_path=abs_path,
-                name=name,
-                tissue_seg_path=tissue_seg_path,
-                custom_mpp_keys=self.custom_mpp_keys,
-                mpp=valid_mpps[wsi_idx] if valid_mpps is not None else None,
-                max_workers=self.max_workers,
-                reader_type=reader_type,
+                slide = stack.enter_context(load_wsi(
+                    slide_path=abs_path,
+                    name=name,
+                    tissue_seg_path=tissue_seg_path,
+                    custom_mpp_keys=self.custom_mpp_keys,
+                    mpp=valid_mpps[wsi_idx] if valid_mpps is not None else None,
+                    max_workers=self.max_workers,
+                    reader_type=reader_type,
+                    lazy_init=True,
+                ))
+                self.wsis.append(slide)
+        except Exception:
+            stack.close()
+            raise
+        self._wsi_stack = stack
+
+    def _record_outcome(
+        self,
+        log_fp: str,
+        slide_ref: Dict[str, Any],
+        task: str,
+        status: str,
+        message: str,
+        *,
+        reason: Optional[str] = None,
+        outputs: Optional[Dict[str, Any]] = None,
+        attempt: Optional[Dict[str, Any]] = None,
+        wsi_meta: Optional[Dict[str, Any]] = None,
+        write_log: bool = True,
+    ) -> None:
+        """
+        Record a single task outcome to the per-job text log and the per-slide
+        WSI state from one `message`, so the two records can never drift.
+
+        The tqdm progress line (`set_postfix_str`) is intentionally left to the
+        call site: it is terse, ephemeral progress text, not a persisted record.
+
+        Parameters:
+            write_log: When False, only the WSI state is updated. Used for lock
+                contention, where writing to the shared log would clobber the
+                owning worker's entry. State updates are best-effort and never raise.
+        """
+        if write_log:
+            update_log(log_fp, f"{slide_ref['name']}{slide_ref['ext']}", message)
+        try:
+            update_task_state(
+                self.job_dir,
+                slide_ref,
+                task,
+                status,
+                reason=reason,
+                message=message,
+                outputs=outputs,
+                attempt=attempt,
+                wsi_meta=wsi_meta,
             )
-            self.wsis.append(slide)
+        except Exception:
+            pass
 
     def run_segmentation_job(
         self, 
@@ -217,21 +307,57 @@ class Processor:
 
         self.loop = tqdm(self.wsis, desc='Segmenting tissue', total = len(self.wsis))
         for wsi in self.loop:   
+            slide_ref = make_slide_ref(
+                name=wsi.name,
+                ext=wsi.ext,
+                slide_path=getattr(wsi, "slide_path", f"{wsi.name}{wsi.ext}"),
+                rel_path=None,
+                reader_type=getattr(wsi, "__class__", type(wsi)).__name__,
+            )
+            wsi_meta = {
+                "dimensions": getattr(wsi, "dimensions", None),
+                "mpp": getattr(wsi, "mpp", None),
+                "mag": getattr(wsi, "mag", None),
+                "level_count": getattr(wsi, "level_count", None),
+            }
             # Check if contour already exists
             if os.path.exists(os.path.join(saveto, f'{wsi.name}.jpg')) and not is_locked(os.path.join(saveto, f'{wsi.name}.jpg')):
                 self.loop.set_postfix_str(f'{wsi.name} already segmented. Skipping...')
-                update_log(os.path.join(self.job_dir, '_logs_segmentation.txt'), f'{wsi.name}{wsi.ext}', 'Tissue segmented.')
+                self._record_outcome(
+                    os.path.join(self.job_dir, '_logs_segmentation.txt'),
+                    slide_ref, "segmentation", "skipped",
+                    "Tissue already segmented; skipping.",
+                    reason="already_segmented",
+                    outputs={"contour_jpg": os.path.join(saveto, f"{wsi.name}.jpg")},
+                    wsi_meta=wsi_meta,
+                )
                 continue
 
             # Check if another process has claimed this slide
             if is_locked(os.path.join(saveto, f'{wsi.name}.jpg')):
                 self.loop.set_postfix_str(f'{wsi.name} is locked. Skipping...')
+                self._record_outcome(
+                    os.path.join(self.job_dir, '_logs_segmentation.txt'),
+                    slide_ref, "segmentation", "skipped",
+                    "Locked by another worker; skipping.",
+                    reason="locked",
+                    outputs={"contour_jpg": os.path.join(saveto, f"{wsi.name}.jpg")},
+                    wsi_meta=wsi_meta,
+                    write_log=False,
+                )
                 continue
 
             try:
                 self.loop.set_postfix_str(f'Segmenting {wsi}')
                 create_lock(os.path.join(saveto, f'{wsi.name}.jpg'))
-                update_log(os.path.join(self.job_dir, '_logs_segmentation.txt'), f'{wsi.name}{wsi.ext}', 'LOCKED. Segmenting tissue...')
+                self._record_outcome(
+                    os.path.join(self.job_dir, '_logs_segmentation.txt'),
+                    slide_ref, "segmentation", "running",
+                    "Segmenting tissue...",
+                    outputs={"contour_jpg": os.path.join(saveto, f"{wsi.name}.jpg")},
+                    attempt=make_attempt("started"),
+                    wsi_meta=wsi_meta,
+                )
 
                 # call a function from WSI object to do the work
                 gdf_saveto = wsi.segment_tissue(
@@ -244,22 +370,69 @@ class Processor:
                 )
 
                 # additionally remove artifacts for better segmentation.
+                artifact_removal_emptied_tissue = False
                 if artifact_remover_model is not None:
+                    had_tissue_before_artifacts = not gpd.read_file(gdf_saveto, rows=1).empty
                     gdf_saveto = wsi.segment_tissue(
                         segmentation_model=artifact_remover_model,
                         target_mag=artifact_remover_model.target_mag,
                         holes_are_tissue=False,
                         job_dir=self.job_dir
                     )
+                    # Detect the case where artifact removal discarded every tissue
+                    # region the tissue segmenter had found: the slide then silently
+                    # produces no patches/features. Surfaced to the user below.
+                    artifact_removal_emptied_tissue = (
+                        had_tissue_before_artifacts and gpd.read_file(gdf_saveto, rows=1).empty
+                    )
 
                 remove_lock(os.path.join(saveto, f'{wsi.name}.jpg'))
 
                 gdf = gpd.read_file(gdf_saveto, rows=1)
                 if gdf.empty:
-                    update_log(os.path.join(self.job_dir, '_logs_segmentation.txt'), f'{wsi.name}{wsi.ext}', 'Segmentation returned empty GeoDataFrame.')
+                    # Build a single message + reason and reuse it across the console,
+                    # the segmentation log, and the per-slide WSI state.
+                    if artifact_removal_emptied_tissue:
+                        empty_reason = "artifact_removal_emptied_tissue"
+                        empty_msg = (
+                            f"Artifact removal discarded all tissue detected for {wsi.name}{wsi.ext}; "
+                            "this slide will yield no patches or features. Soft/blurry regions (e.g. on "
+                            "downsampled levels of some scanners) can be flagged as out-of-focus artifacts."
+                        )
+                        if not getattr(artifact_remover_model, 'remove_penmarks_only', False):
+                            empty_msg += (
+                                " Re-run with `--remove_penmarks` instead of `--remove_artifacts` for less "
+                                "aggressive removal (pen markings only)."
+                            )
+                    else:
+                        empty_reason = "empty_geodataframe"
+                        empty_msg = "Segmentation returned an empty GeoDataFrame (no tissue detected)."
+                    print(f"[Warning] {empty_msg}")
                     self.loop.set_postfix_str(f'Empty GeoDataFrame for {wsi.name}.')
+                    self._record_outcome(
+                        os.path.join(self.job_dir, '_logs_segmentation.txt'),
+                        slide_ref, "segmentation", "completed",
+                        empty_msg,
+                        reason=empty_reason,
+                        outputs={
+                            "contour_geojson": gdf_saveto,
+                            "contour_jpg": os.path.join(saveto, f"{wsi.name}.jpg"),
+                        },
+                        attempt=make_attempt("finished"),
+                        wsi_meta=wsi_meta,
+                    )
                 else:
-                    update_log(os.path.join(self.job_dir,  '_logs_segmentation.txt'), f'{wsi.name}{wsi.ext}', 'Tissue segmented.')
+                    self._record_outcome(
+                        os.path.join(self.job_dir, '_logs_segmentation.txt'),
+                        slide_ref, "segmentation", "completed",
+                        "Tissue segmented.",
+                        outputs={
+                            "contour_geojson": gdf_saveto,
+                            "contour_jpg": os.path.join(saveto, f"{wsi.name}.jpg"),
+                        },
+                        attempt=make_attempt("finished"),
+                        wsi_meta=wsi_meta,
+                    )
                 
                 # Release WSI resources to prevent memory accumulation
                 wsi.release()
@@ -272,11 +445,17 @@ class Processor:
                 except Exception:
                     pass
                 if self.skip_errors:
-                    update_log(os.path.join(self.job_dir, '_logs_segmentation.txt'), f'{wsi.name}{wsi.ext}', f'ERROR: {e}')
+                    self._record_outcome(
+                        os.path.join(self.job_dir, '_logs_segmentation.txt'),
+                        slide_ref, "segmentation", "error",
+                        f"ERROR: {e}",
+                        attempt=make_attempt("error", error=str(e)),
+                        wsi_meta=wsi_meta,
+                    )
                     continue
                 else:
                     raise e
-                
+
         # Return the directory where the contours are saved
         return saveto
 
@@ -288,6 +467,10 @@ class Processor:
         saveto: str | None = None, 
         visualize: bool = True,
         min_tissue_proportion: float = 0.,
+        dump_patches: bool = False,
+        dump_patches_max: int = 0,
+        dump_patches_format: str = "png",
+        dump_patches_jpeg_quality: int = 90,
     ) -> str:
         """
         The `run_patching_job` function extracts patches from the segmented tissue regions of slides. 
@@ -302,12 +485,21 @@ class Processor:
             overlap (int, optional): 
                 The amount of overlap between adjacent patches, specified in pixels. Defaults to 0.
             saveto (str, optional): 
-                The directory where patch data and visualizations will be saved. If not provided, a directory 
-                name will be generated automatically. Defaults to None.
+                The directory where patch data and visualizations will be saved (relative to ``job_dir``). If not 
+                provided, a directory name will be generated automatically. Defaults to None.
             visualize (bool, optional): 
                 Whether to generate and save visualizations of the patches. Defaults to True.
-            min_tissue_proportion: float, optional 
+            min_tissue_proportion (float, optional): 
                 Minimum proportion of the patch under tissue to be kept. Defaults to 0. 
+            dump_patches (bool, optional): 
+                If True, also writes patch images to disk under ``<saveto>/patch_images/<slide_name>/`` for debugging. 
+                Defaults to False.
+            dump_patches_max (int, optional): 
+                Maximum number of patch images to write per slide (0 = no limit). Defaults to 0.
+            dump_patches_format (str, optional): 
+                Image format for dumped patches: ``png`` or ``jpg``. Defaults to ``png``.
+            dump_patches_jpeg_quality (int, optional): 
+                JPEG quality (1-100) when ``dump_patches_format`` is ``jpg``. Defaults to 90.
 
         Returns:
             str: Absolute path to directory containing patch coordinates.
@@ -323,8 +515,18 @@ class Processor:
         ...     saveto="output/patches/"
         ... )
         """
+        def _fmt_mag(mag: float) -> str:
+            try:
+                m = float(mag)
+            except Exception:
+                return str(mag)
+            if abs(m - round(m)) < 1e-9:
+                return str(int(round(m)))
+            # Keep fractional mags compact (e.g., 2.5 not 2.500000)
+            return f"{m:g}"
+
         if saveto is None:
-            saveto = f"{target_magnification}x_{patch_size}px_{overlap}px_overlap"
+            saveto = f"{_fmt_mag(target_magnification)}x_{patch_size}px_{overlap}px_overlap"
 
         self.target_magnification = target_magnification
 
@@ -343,35 +545,91 @@ class Processor:
         )
         self.loop = tqdm(self.wsis, desc=f'Saving tissue coordinates to {saveto}', total = len(self.wsis))
         for wsi in self.loop:    
+            slide_ref = make_slide_ref(
+                name=wsi.name,
+                ext=wsi.ext,
+                slide_path=getattr(wsi, "slide_path", f"{wsi.name}{wsi.ext}"),
+                rel_path=None,
+                reader_type=getattr(wsi, "__class__", type(wsi)).__name__,
+            )
+            wsi_meta = {
+                "dimensions": getattr(wsi, "dimensions", None),
+                "mpp": getattr(wsi, "mpp", None),
+                "mag": getattr(wsi, "mag", None),
+                "level_count": getattr(wsi, "level_count", None),
+            }
         
             # Check if patch coords already exist
             if os.path.exists(os.path.join(self.job_dir, saveto, 'patches', f'{wsi.name}_patches.h5')):
                 self.loop.set_postfix_str(f'Patch coords already generated for {wsi.name}. Skipping...')
-                update_log(os.path.join(self.job_dir, saveto, '_logs_coords.txt'), f'{wsi.name}{wsi.ext}', 'Coords generated')
+                self._record_outcome(
+                    os.path.join(self.job_dir, saveto, '_logs_coords.txt'),
+                    slide_ref, "coords", "skipped",
+                    "Patch coords already generated; skipping.",
+                    reason="already_generated",
+                    outputs={
+                        "coords_h5": os.path.join(self.job_dir, saveto, "patches", f"{wsi.name}_patches.h5")
+                    },
+                    wsi_meta=wsi_meta,
+                )
                 continue
-            
+
             # Check if another process has claimed this slide
             if is_locked(os.path.join(self.job_dir, saveto, 'patches', f'{wsi.name}_patches.h5')):
                 self.loop.set_postfix_str(f'{wsi.name} is locked. Skipping...')
+                self._record_outcome(
+                    os.path.join(self.job_dir, saveto, '_logs_coords.txt'),
+                    slide_ref, "coords", "skipped",
+                    "Locked by another worker; skipping.",
+                    reason="locked",
+                    outputs={
+                        "coords_h5": os.path.join(self.job_dir, saveto, "patches", f"{wsi.name}_patches.h5")
+                    },
+                    wsi_meta=wsi_meta,
+                    write_log=False,
+                )
                 continue
 
             # Check if segmentation exists
             if wsi.tissue_seg_path is None or not os.path.exists(wsi.tissue_seg_path):
                 self.loop.set_postfix_str(f'GeoJSON not found for {wsi.name}. Skipping...')
-                update_log(os.path.join(self.job_dir, saveto, '_logs_coords.txt'), f'{wsi.name}{wsi.ext}', 'GeoJSON not found.')
+                self._record_outcome(
+                    os.path.join(self.job_dir, saveto, '_logs_coords.txt'),
+                    slide_ref, "coords", "skipped",
+                    "Tissue GeoJSON not found; run segmentation first.",
+                    reason="geojson_not_found",
+                    outputs={"tissue_geojson": wsi.tissue_seg_path},
+                    wsi_meta=wsi_meta,
+                )
                 continue
-            
+
             # Check if GeoJSON is empty
             gdf = gpd.read_file(wsi.tissue_seg_path, rows=1)
             if gdf.empty:
                 self.loop.set_postfix_str(f'Empty GeoDataFrame for {wsi.name}. Skipping...')
-                update_log(os.path.join(self.job_dir, saveto, '_logs_coords.txt'), f'{wsi.name}{wsi.ext}', 'Empty GeoDataFrame.')
+                self._record_outcome(
+                    os.path.join(self.job_dir, saveto, '_logs_coords.txt'),
+                    slide_ref, "coords", "skipped",
+                    "Tissue GeoDataFrame is empty; no coordinates to extract.",
+                    reason="empty_geodataframe",
+                    outputs={"tissue_geojson": wsi.tissue_seg_path},
+                    wsi_meta=wsi_meta,
+                )
                 continue
 
             try:
                 self.loop.set_postfix_str(f'Generating patch coords for {wsi.name}{wsi.ext}')
-                update_log(os.path.join(self.job_dir, saveto, '_logs_coords.txt'), f'{wsi.name}{wsi.ext}', 'LOCKED. Generating coords...')
                 create_lock(os.path.join(self.job_dir, saveto, 'patches', f'{wsi.name}_patches.h5'))
+                self._record_outcome(
+                    os.path.join(self.job_dir, saveto, '_logs_coords.txt'),
+                    slide_ref, "coords", "running",
+                    "Generating patch coords...",
+                    outputs={
+                        "coords_h5": os.path.join(self.job_dir, saveto, "patches", f"{wsi.name}_patches.h5")
+                    },
+                    attempt=make_attempt("started"),
+                    wsi_meta=wsi_meta,
+                )
 
                 # save tissue coords
                 wsi.extract_tissue_coords(
@@ -382,6 +640,17 @@ class Processor:
                     min_tissue_proportion=min_tissue_proportion,
                 )
 
+                # optionally dump patch images for debugging/inspection
+                if dump_patches:
+                    coords_fp = os.path.join(self.job_dir, saveto, 'patches', f'{wsi.name}_patches.h5')
+                    wsi.dump_patches(
+                        coords_path=coords_fp,
+                        save_patches_dir=os.path.join(self.job_dir, saveto, "patch_images"),
+                        max_patches=dump_patches_max,
+                        image_format=dump_patches_format,
+                        jpeg_quality=dump_patches_jpeg_quality,
+                    )
+
                 # save tissue coords visualization
                 if visualize:  
                     wsi.visualize_coords(
@@ -390,7 +659,17 @@ class Processor:
                     )
 
                 remove_lock(os.path.join(self.job_dir, saveto, 'patches', f'{wsi.name}_patches.h5'))
-                update_log(os.path.join(self.job_dir, saveto, '_logs_coords.txt'), f'{wsi.name}{wsi.ext}', 'Coords generated')
+                self._record_outcome(
+                    os.path.join(self.job_dir, saveto, '_logs_coords.txt'),
+                    slide_ref, "coords", "completed",
+                    "Patch coords generated.",
+                    outputs={
+                        "coords_h5": os.path.join(self.job_dir, saveto, "patches", f"{wsi.name}_patches.h5"),
+                        "coords_viz": os.path.join(self.job_dir, saveto, "visualization", f"{wsi.name}.jpg"),
+                    },
+                    attempt=make_attempt("finished"),
+                    wsi_meta=wsi_meta,
+                )
                 
                 # Release WSI resources to prevent memory accumulation
                 wsi.release()
@@ -403,11 +682,17 @@ class Processor:
                 except Exception:
                     pass
                 if self.skip_errors:
-                    update_log(os.path.join(self.job_dir, saveto, '_logs_coords.txt'), f'{wsi.name}{wsi.ext}', f'ERROR: {e}')
+                    self._record_outcome(
+                        os.path.join(self.job_dir, saveto, '_logs_coords.txt'),
+                        slide_ref, "coords", "error",
+                        f"ERROR: {e}",
+                        attempt=make_attempt("error", error=str(e)),
+                        wsi_meta=wsi_meta,
+                    )
                     continue
                 else:
                     raise e
-        
+
         # Return the directory where the coordinates are saved
         return os.path.join(self.job_dir, saveto)
 
@@ -488,31 +773,71 @@ class Processor:
         )
 
         log_fp = os.path.join(self.job_dir, coords_dir, f'_logs_feats_{patch_encoder.enc_name}.txt')
+        feat_task = f"patch_features:{patch_encoder.enc_name if hasattr(patch_encoder, 'enc_name') else 'encoder'}"
         self.loop = tqdm(self.wsis, desc=f'Extracting patch features from coords in {coords_dir}', total = len(self.wsis))
         for wsi in self.loop:    
+            slide_ref = make_slide_ref(
+                name=wsi.name,
+                ext=wsi.ext,
+                slide_path=getattr(wsi, "slide_path", f"{wsi.name}{wsi.ext}"),
+                rel_path=None,
+                reader_type=getattr(wsi, "__class__", type(wsi)).__name__,
+            )
+            wsi_meta = {
+                "dimensions": getattr(wsi, "dimensions", None),
+                "mpp": getattr(wsi, "mpp", None),
+                "mag": getattr(wsi, "mag", None),
+                "level_count": getattr(wsi, "level_count", None),
+            }
             wsi_feats_fp = os.path.join(self.job_dir, saveto, f'{wsi.name}.{saveas}')
             # Check if features already exist
             if os.path.exists(wsi_feats_fp) and not is_locked(wsi_feats_fp):
                 self.loop.set_postfix_str(f'Features already extracted for {wsi}. Skipping...')
-                update_log(log_fp, f'{wsi.name}{wsi.ext}', 'Features extracted.')
+                self._record_outcome(
+                    log_fp, slide_ref, feat_task, "skipped",
+                    "Patch features already extracted; skipping.",
+                    reason="already_extracted",
+                    outputs={"features_path": wsi_feats_fp},
+                    wsi_meta=wsi_meta,
+                )
                 continue
 
             # Check if coords exist
             coords_path = os.path.join(self.job_dir, coords_dir, 'patches', f'{wsi.name}_patches.h5')
             if not os.path.exists(coords_path):
                 self.loop.set_postfix_str(f'Coords not found for {wsi.name}. Skipping...')
-                update_log(log_fp, f'{wsi.name}{wsi.ext}', 'Coords not found.')
+                self._record_outcome(
+                    log_fp, slide_ref, feat_task, "skipped",
+                    "Patch coords not found; run the coords step first.",
+                    reason="coords_not_found",
+                    outputs={"coords_path": coords_path},
+                    wsi_meta=wsi_meta,
+                )
                 continue
 
             # Check if another process has claimed this slide
             if is_locked(wsi_feats_fp):
                 self.loop.set_postfix_str(f'{wsi.name} is locked. Skipping...')
+                self._record_outcome(
+                    log_fp, slide_ref, feat_task, "skipped",
+                    "Locked by another worker; skipping.",
+                    reason="locked",
+                    outputs={"features_path": wsi_feats_fp},
+                    wsi_meta=wsi_meta,
+                    write_log=False,
+                )
                 continue
 
             try:
                 self.loop.set_postfix_str(f'Extracting features from {wsi.name}{wsi.ext}')
                 create_lock(wsi_feats_fp)
-                update_log(log_fp, f'{wsi.name}{wsi.ext}', 'LOCKED. Extracting features...')
+                self._record_outcome(
+                    log_fp, slide_ref, feat_task, "running",
+                    "Extracting patch features...",
+                    outputs={"features_path": wsi_feats_fp, "coords_path": coords_path},
+                    attempt=make_attempt("started"),
+                    wsi_meta=wsi_meta,
+                )
 
                 wsi.extract_patch_features(
                     patch_encoder = patch_encoder,
@@ -524,8 +849,14 @@ class Processor:
                 )
 
                 remove_lock(wsi_feats_fp)
-                update_log(log_fp, f'{wsi.name}{wsi.ext}', 'Features extracted.')
-                
+                self._record_outcome(
+                    log_fp, slide_ref, feat_task, "completed",
+                    "Patch features extracted.",
+                    outputs={"features_path": wsi_feats_fp, "coords_path": coords_path},
+                    attempt=make_attempt("finished"),
+                    wsi_meta=wsi_meta,
+                )
+
                 # Release WSI resources to prevent memory accumulation
                 wsi.release()
             except Exception as e:
@@ -537,11 +868,16 @@ class Processor:
                 except Exception:
                     pass
                 if self.skip_errors:
-                    update_log(log_fp, f'{wsi.name}{wsi.ext}', f'ERROR: {e}')
+                    self._record_outcome(
+                        log_fp, slide_ref, feat_task, "error",
+                        f"ERROR: {e}",
+                        attempt=make_attempt("error", error=str(e)),
+                        wsi_meta=wsi_meta,
+                    )
                     continue
                 else:
                     raise e
-        
+
         # Return the directory where the features are saved
         return os.path.join(self.job_dir, saveto)
 
@@ -632,31 +968,75 @@ class Processor:
             ignore=['loop', 'valid_slides', 'wsis']
         )
 
+        slide_feat_log_fp = os.path.join(self.job_dir, coords_dir, f'_logs_slide_features_{slide_encoder.enc_name}.txt')
+        slide_feat_task = f"slide_features:{slide_encoder.enc_name}"
         self.loop = tqdm(self.wsis, desc=f'Extracting slide features using {slide_encoder.enc_name}', total=len(self.wsis))
         for wsi in self.loop:
+            slide_ref = make_slide_ref(
+                name=wsi.name,
+                ext=wsi.ext,
+                slide_path=getattr(wsi, "slide_path", f"{wsi.name}{wsi.ext}"),
+                rel_path=None,
+                reader_type=getattr(wsi, "__class__", type(wsi)).__name__,
+            )
+            wsi_meta = {
+                "dimensions": getattr(wsi, "dimensions", None),
+                "mpp": getattr(wsi, "mpp", None),
+                "mag": getattr(wsi, "mag", None),
+                "level_count": getattr(wsi, "level_count", None),
+            }
             # Check if slide features already exist
             slide_feature_path = os.path.join(self.job_dir, saveto, f'{wsi.name}.{saveas}')
             if os.path.exists(slide_feature_path) and not is_locked(slide_feature_path):
                 self.loop.set_postfix_str(f'Slide features already extracted for {wsi.name}. Skipping...')
-                update_log(os.path.join(self.job_dir, coords_dir, f'_logs_slide_features_{slide_encoder.enc_name}.txt'), f'{wsi.name}{wsi.ext}', 'Slide features extracted.')
+                self._record_outcome(
+                    slide_feat_log_fp, slide_ref, slide_feat_task, "skipped",
+                    "Slide features already extracted; skipping.",
+                    reason="already_extracted",
+                    outputs={"slide_features_path": slide_feature_path},
+                    wsi_meta=wsi_meta,
+                )
                 continue
 
             # Check if patch features exist
             patch_features_path = os.path.join(self.job_dir, patch_features_dir, f'{wsi.name}.h5')
             if not os.path.exists(patch_features_path):
                 self.loop.set_postfix_str(f'Patch features not found for {wsi.name}. Skipping...')
-                update_log(os.path.join(self.job_dir, coords_dir, f'_logs_slide_features_{slide_encoder.enc_name}.txt'), f'{wsi.name}{wsi.ext}', 'Patch features not found.')
+                self._record_outcome(
+                    slide_feat_log_fp, slide_ref, slide_feat_task, "skipped",
+                    "Patch features not found; run the patch-feature step first.",
+                    reason="patch_features_not_found",
+                    outputs={"patch_features_path": patch_features_path},
+                    wsi_meta=wsi_meta,
+                )
                 continue
 
             # Check if another process has claimed this slide
             if is_locked(slide_feature_path):
                 self.loop.set_postfix_str(f'{wsi.name} is locked. Skipping...')
+                self._record_outcome(
+                    slide_feat_log_fp, slide_ref, slide_feat_task, "skipped",
+                    "Locked by another worker; skipping.",
+                    reason="locked",
+                    outputs={"slide_features_path": slide_feature_path},
+                    wsi_meta=wsi_meta,
+                    write_log=False,
+                )
                 continue
 
             try:
                 self.loop.set_postfix_str(f'Extracting slide features for {wsi.name}{wsi.ext}')
                 create_lock(slide_feature_path)
-                update_log(os.path.join(self.job_dir, coords_dir, f'_logs_slide_features_{slide_encoder.enc_name}.txt'), f'{wsi.name}{wsi.ext}', 'LOCKED. Extracting slide features...')
+                self._record_outcome(
+                    slide_feat_log_fp, slide_ref, slide_feat_task, "running",
+                    "Extracting slide features...",
+                    outputs={
+                        "slide_features_path": slide_feature_path,
+                        "patch_features_path": patch_features_path,
+                    },
+                    attempt=make_attempt("started"),
+                    wsi_meta=wsi_meta,
+                )
 
                 # Call the extract_slide_features method
                 wsi.extract_slide_features(
@@ -667,8 +1047,17 @@ class Processor:
                 )
 
                 remove_lock(slide_feature_path)
-                update_log(os.path.join(self.job_dir, coords_dir, f'_logs_slide_features_{slide_encoder.enc_name}.txt'), f'{wsi.name}{wsi.ext}', 'Slide features extracted.')
-                
+                self._record_outcome(
+                    slide_feat_log_fp, slide_ref, slide_feat_task, "completed",
+                    "Slide features extracted.",
+                    outputs={
+                        "slide_features_path": slide_feature_path,
+                        "patch_features_path": patch_features_path,
+                    },
+                    attempt=make_attempt("finished"),
+                    wsi_meta=wsi_meta,
+                )
+
                 # Release WSI resources to prevent memory accumulation
                 wsi.release()
             except Exception as e:
@@ -680,7 +1069,12 @@ class Processor:
                 except Exception:
                     pass
                 if self.skip_errors:
-                    update_log(os.path.join(self.job_dir, coords_dir, f'_logs_slide_features_{slide_encoder.enc_name}.txt'), f'{wsi.name}{wsi.ext}', f'ERROR: {e}')
+                    self._record_outcome(
+                        slide_feat_log_fp, slide_ref, slide_feat_task, "error",
+                        f"ERROR: {e}",
+                        attempt=make_attempt("error", error=str(e)),
+                        wsi_meta=wsi_meta,
+                    )
                     continue
                 else:
                     raise e
@@ -753,12 +1147,18 @@ class Processor:
         Frees memory, closes file handles, and clears GPU memory.
         Should be called after processing is complete to avoid memory leaks.
         """
-        if hasattr(self, "wsis"):
+        if hasattr(self, "_wsi_stack") and self._wsi_stack is not None:
+            self._wsi_stack.close()
+            self._wsi_stack = None
+
+        elif hasattr(self, "wsis"):
             for wsi in self.wsis:
                 try:
                     wsi.release()
                 except Exception:
                     pass
+
+        if hasattr(self, "wsis"):
             self.wsis.clear()
 
         # Also clear loop references (e.g., tqdm)

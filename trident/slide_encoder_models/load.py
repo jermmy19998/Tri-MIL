@@ -6,7 +6,7 @@ from abc import abstractmethod
 from einops import rearrange
 from typing import Optional, Tuple, Dict, Any
 
-from trident.IO import get_weights_path
+from trident.IO import get_weights_path, get_dir
 
 """
 This file contains 10+ pretrained slide encoders, all loadable via the encoder_factory() function.
@@ -16,21 +16,18 @@ def encoder_factory(model_name: str, pretrained: bool = True, freeze: bool = Tru
         """
         Build a slide encoder model.
 
-        Parameters
-        ----------
-        model_name : str
-            Name of the model to build.
-        pretrained : bool
-            Whether to load pretrained weights.
-        freeze : bool
-            Whether to freeze the weights of the model.
-        **kwargs : dict
-            Additional arguments to pass to the model constructor.
+        Parameters:
+            model_name (str):
+                Name of the model to build.
+            pretrained (bool):
+                Whether to load pretrained weights.
+            freeze (bool):
+                Whether to freeze the weights of the model.
+            **kwargs (dict):
+                Additional arguments to pass to the model constructor.
 
-        Returns
-        -------
-        torch.nn.Module
-            The slide encoder model.
+        Returns:
+            torch.nn.Module: The slide encoder model.
         """
 
         if model_name.startswith('mean-'):
@@ -51,7 +48,9 @@ slide_to_patch_encoder_name = {
     'chief': 'ctranspath',
     'gigapath': 'gigapath',
     'madeleine': 'conch_v1',
-    'feather': 'conch_v15'
+    'feather': 'conch_v15',
+    'feather_uni_v2': 'uni_v2',
+    'care': 'conch_v15',
 }
 
 
@@ -101,17 +100,15 @@ class CustomSlideEncoder(BaseSlideEncoder):
         This class is used when the model and precision are pre-instantiated externally 
         and should be injected directly into the encoder wrapper.
 
-        Parameters
-        ----------
-        enc_name : str
-            A unique name or identifier for the encoder.
-        model : torch.nn.Module 
+        Parameters:
+            enc_name (str):
+                A unique name or identifier for the encoder.
+            model (torch.nn.Module):
                 A PyTorch model instance to use for slide-level inference.
-            precision (torch.dtype, optional): 
+            precision (torch.dtype, optional):
                 The precision to use for inference (e.g., torch.float32, torch.float16).
-            embedding_dim (int, optional): 
-                The output embedding dimension. If not provided, will attempt to use 
-                `model.embedding_dim` if it exists.
+            embedding_dim (int, optional):
+                The output embedding dimension. If not provided, will attempt to use `model.embedding_dim` if it exists.
         """
         super().__init__(freeze=False)  # Freezing should be handled externally
         self.enc_name = enc_name
@@ -337,7 +334,11 @@ class GigaPathSlideEncoder(BaseSlideEncoder):
             raise Exception("Please install flash_attn version 2.5.8 using `pip install flash_attn==2.5.8`.")
         
         if pretrained:
-            model = create_model("hf_hub:prov-gigapath/prov-gigapath", "gigapath_slide_enc12l768d", 1536, global_pool=True)
+            weights_path = get_weights_path('slide', self.enc_name)
+            if weights_path:
+                model = create_model(weights_path, "gigapath_slide_enc12l768d", 1536, global_pool=True)
+            else:
+                model = create_model("hf_hub:prov-gigapath/prov-gigapath", "gigapath_slide_enc12l768d", 1536, global_pool=True)
         else:
             model = create_model("", "gigapath_slide_enc12l768d", 1536, global_pool=True)
         
@@ -366,6 +367,8 @@ class MadeleineSlideEncoder(BaseSlideEncoder):
 
         self.enc_name = 'madeleine'
         weights_path = get_weights_path('slide', self.enc_name)
+        if not weights_path:
+            weights_path = os.path.join(get_dir(), "models", "madeleine")
         embedding_dim = 512
 
         try:
@@ -407,6 +410,52 @@ class ThreadsSlideEncoder(BaseSlideEncoder):
         pass
 
 
+class CARESlideEncoder(BaseSlideEncoder):
+    def __init__(self, **build_kwargs):
+        """CARE slide encoder initialization."""
+        super().__init__(**build_kwargs)
+
+    def _build(self, pretrained=True):
+        self.enc_name = 'care'
+        assert pretrained, "CARESlideEncoder has no non-pretrained model. Please load with pretrained=True."
+
+        from transformers import AutoModel
+        try:
+            model = AutoModel.from_pretrained(
+                "Zipper-1/CARE",
+                trust_remote_code=True
+            )
+        except Exception:
+            traceback.print_exc()
+            raise Exception(
+                "Failed to load CARE from Hugging Face. "
+                "Please make sure you have accepted access conditions for Zipper-1/CARE "
+                "and logged in with `huggingface-cli login`."
+            )
+
+        precision = torch.float32
+        embedding_dim = 512
+        return model, precision, embedding_dim
+
+    def forward(self, batch, device='cuda'):
+        features = batch['features'].to(device)
+        coords = batch['coords'].to(device)
+        patch_size = batch['attributes']['patch_size_level0']
+        coords = coords // int(patch_size)
+        if features.dim() == 2:
+            features = features.unsqueeze(0)
+        if coords.dim() == 2:
+            coords = coords.unsqueeze(0)
+        N_values = torch.full(
+            (features.shape[0],),
+            features.shape[1],
+            dtype=torch.long,
+            device=features.device
+        )
+        out = self.model(features, N_values, coords)
+        return out.wsi_embedding
+
+
 class TitanSlideEncoder(BaseSlideEncoder):
     
     def __init__(self, **build_kwargs):
@@ -445,6 +494,36 @@ class FeatherSlideEncoder(BaseSlideEncoder):
 
         model_path = snapshot_download(
             repo_id="MahmoodLab/abmil.base.conch_v15.pc108-24k",
+            revision="main",
+            allow_patterns=["*.py", "model.safetensors", "config.json"]
+        )
+        model = AutoModel.from_pretrained(model_path, trust_remote_code=True)
+        precision = torch.float32
+        embedding_dim = 512
+
+        return model, precision, embedding_dim
+    
+    def forward(self, batch, device='cuda'):
+        z, _ = self.model.forward_features(batch['features'].to(device))
+        return z
+
+class FeatherUni2SlideEncoder(BaseSlideEncoder):
+
+    def __init__(self, **build_kwargs):
+        """
+        FeatherUni2SlideEncoder initialization.
+        """
+        super().__init__(**build_kwargs)    
+
+    def _build(self, pretrained=True):
+        self.enc_name = 'feather_uni_v2'
+
+        assert pretrained, "FeatherUni2SlideEncoder has no non-pretrained models. Please load with pretrained=True."
+        from transformers import AutoModel 
+        from huggingface_hub import snapshot_download
+
+        model_path = snapshot_download(
+            repo_id="MahmoodLab/abmil.base.uni_v2.pc108-24k",
             revision="main",
             allow_patterns=["*.py", "model.safetensors", "config.json"]
         )
@@ -530,6 +609,8 @@ encoder_registry = {
     'gigapath': GigaPathSlideEncoder,
     'madeleine': MadeleineSlideEncoder,
     'feather': FeatherSlideEncoder,
+    'feather_uni_v2': FeatherUni2SlideEncoder,
+    'care': CARESlideEncoder,
     'abmil': ABMILSlideEncoder,
 
     # Mean encoders
