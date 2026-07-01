@@ -126,6 +126,7 @@ class WSI:
         custom_mpp_keys: Optional[List[str]] = None,
         lazy_init: bool = True,
         mpp: Optional[float] = None,
+        default_mpp: Optional[float] = None,
         max_workers: Optional[int] = None,
     ):
         """
@@ -144,6 +145,10 @@ class WSI:
                 If True, defer loading the WSI until required. Defaults to True.
             mpp (float, optional):
                 If not None, will be the reference micron per pixel (mpp). Handy when mpp is not provided in the WSI.
+            default_mpp (float, optional):
+                Fallback micron-per-pixel value used when the backend cannot recover MPP from metadata.
+                This is especially useful for standard image files (e.g. PNG/JPG) that often do not
+                embed microscopy resolution metadata.
             max_workers (Optional[int]):
                 Maximum number of workers for data loading.
 
@@ -158,6 +163,7 @@ class WSI:
 
         self.width, self.height = None, None  # Placeholder dimensions
         self.mpp = mpp  # Placeholder microns per pixel. Defaults will be None unless specified in constructor. 
+        self.default_mpp = default_mpp
         self.mag = None  # Placeholder magnification
         # Public configuration flag (do not mutate at runtime).
         self.lazy_init = lazy_init

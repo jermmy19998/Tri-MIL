@@ -22,23 +22,12 @@ class ImageWSI(WSI):
             lazy_init (bool, default=True):
                 Whether to defer initialization until the WSI is accessed.
 
-        Raises:
-            ValueError:
-                If the required 'mpp' argument is not provided.
-
         Example
         -------
         >>> wsi = ImageWSI("path/to/image.png", lazy_init=False, mpp=0.51)
         >>> print(wsi)
         <width=5120, height=3840, backend=ImageWSI, mpp=0.51, mag=20>
         """
-        mpp = kwargs.get("mpp")
-        if mpp is None:
-            raise ValueError(
-                "Missing required argument `mpp`. Standard image formats do not contain microns-per-pixel "
-                "information, so you must specify it manually via the `ImageWSI` constructor."
-            )
-        
         #enable loading large images.
         from PIL import PngImagePlugin
         PngImagePlugin.MAX_TEXT_CHUNK = 2**30  # ~1GB
@@ -78,6 +67,15 @@ class ImageWSI(WSI):
         if not self._initialized:
             try:
                 self._ensure_image_open()
+                if self.mpp is None:
+                    self.mpp = self._fetch_mpp(self.custom_mpp_keys)
+                if self.mpp is None and self.default_mpp is not None:
+                    self.mpp = round(float(self.default_mpp), 4)
+                if self.mpp is None:
+                    raise ValueError(
+                        "Unable to determine `mpp` for image input. Provide `mpp` explicitly, "
+                        "store it in config/CSV, or use an input image with readable DPI metadata."
+                    )
                 self.level_downsamples = [1]
                 self.dimensions = (self.img.width, self.img.height)
                 self.width, self.height = self.dimensions[0], self.dimensions[1]
@@ -93,6 +91,58 @@ class ImageWSI(WSI):
     def _ensure_image_open(self):
         if self.img is None:
             self.img = Image.open(self.slide_path).convert("RGB")
+
+    def _fetch_mpp(self, custom_mpp_keys: List[str] | None = None) -> float | None:
+        """
+        Recover MPP for standard image files.
+
+        Priority:
+        1. Explicit custom metadata keys from PIL `Image.info`
+        2. Common hand-authored MPP keys in `Image.info`
+        3. DPI-style metadata (PNG/JPEG/TIFF via Pillow)
+        """
+        self._ensure_image_open()
+
+        info = getattr(self.img, "info", {}) or {}
+        candidate_keys = list(custom_mpp_keys or []) + [
+            "mpp",
+            "MPP",
+            "microns_per_pixel",
+            "microns-per-pixel",
+            "um_per_px",
+            "um-per-px",
+        ]
+
+        for key in candidate_keys:
+            if key in info:
+                try:
+                    return round(float(info[key]), 4)
+                except (TypeError, ValueError):
+                    continue
+
+        dpi = info.get("dpi")
+        if isinstance(dpi, tuple) and len(dpi) >= 1:
+            try:
+                dpi_x = float(dpi[0])
+                if dpi_x > 0:
+                    return round(25400.0 / dpi_x, 4)
+            except (TypeError, ValueError, ZeroDivisionError):
+                pass
+
+        jfif_density = info.get("jfif_density")
+        jfif_unit = info.get("jfif_unit")
+        if isinstance(jfif_density, tuple) and len(jfif_density) >= 1:
+            try:
+                density_x = float(jfif_density[0])
+                if density_x > 0:
+                    if jfif_unit == 1:  # pixels per inch
+                        return round(25400.0 / density_x, 4)
+                    if jfif_unit == 2:  # pixels per cm
+                        return round(10000.0 / density_x, 4)
+            except (TypeError, ValueError, ZeroDivisionError):
+                pass
+
+        return None
 
     def get_dimensions(self):
         return self.dimensions

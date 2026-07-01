@@ -38,6 +38,8 @@ class Processor:
         reader_type: Optional[WSIReaderType] = None,
         search_nested: bool = False, 
         selected_wsi_paths: Optional[List[str]] = None,
+        mpp: Optional[float] = None,
+        default_mpp: Optional[float] = None,
     ) -> None:
         """
         The `Processor` class handles all preprocessing steps starting from whole-slide images (WSIs). 
@@ -95,6 +97,12 @@ class Processor:
             selected_wsi_paths (List[str], optional):
                 Optional explicit list of slide paths to process. When provided, slide discovery is
                 skipped and only these slides are loaded. Defaults to None.
+            mpp (float, optional):
+                Explicit MPP override applied to slides that do not provide a per-slide MPP via metadata
+                or the custom CSV list. Defaults to None.
+            default_mpp (float, optional):
+                Fallback MPP used when image-based inputs (e.g. PNG/JPG) have no recoverable metadata.
+                Defaults to None.
 
 
         Returns:
@@ -130,6 +138,8 @@ class Processor:
         self.skip_errors = skip_errors
         self.custom_mpp_keys = custom_mpp_keys
         self.max_workers = max_workers
+        self.mpp = mpp
+        self.default_mpp = default_mpp
 
         # Validate extensions
         assert isinstance(self.wsi_ext, list), f'wsi_ext must be a list, got {type(self.wsi_ext)}'
@@ -199,7 +209,12 @@ class Processor:
                     name=name,
                     tissue_seg_path=tissue_seg_path,
                     custom_mpp_keys=self.custom_mpp_keys,
-                    mpp=valid_mpps[wsi_idx] if valid_mpps is not None else None,
+                    mpp=(
+                        valid_mpps[wsi_idx]
+                        if valid_mpps is not None and valid_mpps[wsi_idx] is not None
+                        else self.mpp
+                    ),
+                    default_mpp=self.default_mpp,
                     max_workers=self.max_workers,
                     reader_type=reader_type,
                     lazy_init=True,
