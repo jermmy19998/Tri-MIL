@@ -1,7 +1,7 @@
 # Tri-MIL
 
 <p align="center">
-  English | <a href="./README_CN.md">简体中文</a>
+  <a href="./README.md">English</a> | 简体中文
 </p>
 
 <p align="center">
@@ -9,64 +9,63 @@
 </p>
 
 <p align="center">
-  A unified workflow for WSI preprocessing, feature extraction, MIL training, evaluation, and visualization.
+  一个面向 WSI 预处理、特征提取、MIL 训练、评估与可视化的统一工作流。
 </p>
 
-Tri-MIL is a computational pathology project developed by merging and extending two complementary foundations:
+Tri-MIL 是一个面向计算病理的项目，由两个互补方向融合扩展而来：
 
-- [Trident](https://github.com/mahmoodlab/trident), which provides modern WSI preprocessing and pathology foundation-model feature extraction
-- [MIL_BASELINE](https://github.com/lingxitong/MIL_BASELINE), which provides a broad, unified MIL training and evaluation framework
+- [Trident](https://github.com/mahmoodlab/trident)：提供现代化的 WSI 预处理与病理基础模型特征提取能力
+- [MIL_BASELINE](https://github.com/lingxitong/MIL_BASELINE)：提供统一的多实例学习（MIL）训练与评估框架
 
-Tri-MIL does not simply place the two projects side by side.  
-Its goal is to turn them into one practical workflow for weakly supervised whole-slide learning: from raw slides, to features, to MIL experiments, to visualization.
+Tri-MIL 不是把两个项目简单拼接在一起，而是希望把它们整合为一条完整、实用的弱监督全切片学习流程：从原始切片，到特征，再到 MIL 实验与结果可视化。
 
-## Tri-MIL in One View
+## Tri-MIL 一览
 
-| Part | Purpose | Main paths |
+| 模块 | 作用 | 主要路径 |
 |---|---|---|
-| Preprocessing | Read WSIs, segment tissue, generate patch coordinates, extract patch/slide features | `trident/`, `run_batch_of_slides.py`, `run_single_slide.py` |
-| Training | Train MIL models with a unified config-based interface | `configs/`, `modules/`, `process/`, `train_mil.py` |
-| Evaluation | Test checkpoints and export metrics / inference outputs | `test_mil.py`, `infer_mil.py` |
-| Utilities | Build dataset splits and visualize learned behavior | `split_scripts/`, `vis_scripts/`, `draw_heatmap/` |
+| 预处理 | 读取 WSI、组织分割、patch 坐标生成、patch/slide 特征提取 | `trident/`, `run_batch_of_slides.py`, `run_single_slide.py` |
+| 训练 | 基于统一配置接口训练 MIL 模型 | `configs/`, `modules/`, `process/`, `train_mil.py` |
+| 评估 | 测试模型并导出指标与推理结果 | `test_mil.py`, `infer_mil.py` |
+| 工具 | 数据集划分、结果可视化与热图生成 | `split_scripts/`, `vis_scripts/`, `draw_heatmap/` |
 
-## Why Tri-MIL
+## 为什么做 Tri-MIL
 
-Most pathology workflows split these steps across multiple repositories:
+很多病理项目都会把这些步骤拆散在多个仓库里：
 
-- WSI preprocessing
-- feature extraction
-- dataset split generation
-- MIL training
-- testing and visualization
+- WSI 预处理
+- 特征提取
+- 数据集划分
+- MIL 训练
+- 测试与可视化
 
-Tri-MIL keeps them in one place so experiments are easier to reproduce, extend, and maintain.
+Tri-MIL 的目标是把这些环节统一在一个仓库里，让实验更容易复现、扩展和维护。
 
-## Workflow
+## 工作流
 
-| Stage | What happens | Output |
+| 阶段 | 内容 | 输出 |
 |---|---|---|
-| 1. Preprocess WSIs | tissue segmentation and patch coordinate generation | contours, thumbnails, coordinates |
-| 2. Extract features | patch embeddings or slide embeddings | feature files |
-| 3. Prepare splits | dataset CSV construction and train/val/test split generation | standardized csv files |
-| 4. Train MIL | fit a selected MIL model from YAML config | checkpoints, logs, metrics |
-| 5. Evaluate and visualize | test model behavior and interpret outputs | metrics, ROC, heatmaps, attention maps |
+| 1. WSI 预处理 | 组织分割与 patch 坐标生成 | contours、thumbnails、coordinates |
+| 2. 特征提取 | 生成 patch 特征或 slide 特征 | feature files |
+| 3. 数据组织 | 构建数据集 CSV 与 train/val/test 划分 | 标准化 csv 文件 |
+| 4. MIL 训练 | 从 YAML 配置训练指定 MIL 方法 | checkpoints、logs、metrics |
+| 5. 评估与可视化 | 测试模型并解释输出行为 | metrics、ROC、heatmaps、attention maps |
 
-## Core Capabilities
+## 核心能力
 
-| Area | Summary |
+| 方向 | 说明 |
 |---|---|
-| WSI readers | OpenSlide, CuCIM, SDPC, image files, CZI, OME-Zarr |
-| Tissue segmentation | HEST, GrandQC, Otsu |
-| Feature extraction | unified patch and slide encoder loading |
-| MIL experimentation | many MIL methods under one config-driven interface |
-| Dataset splits | user-defined and k-fold split strategies |
-| Visualization | feature maps, attention maps, heatmaps, inference summaries |
+| WSI 读取 | 支持 OpenSlide、CuCIM、SDPC、普通图像、CZI、OME-Zarr |
+| 组织分割 | 支持 HEST、GrandQC、Otsu |
+| 特征提取 | 支持统一的 patch encoder 和 slide encoder 调用 |
+| MIL 实验 | 多种 MIL 方法共享统一配置接口 |
+| 数据划分 | 支持用户自定义和多种 k-fold 划分 |
+| 可视化 | 支持 feature map、attention map、heatmap 与推理结果分析 |
 
-## Supported Encoders
+## 支持的 Encoder
 
-### Patch Encoders
+### Patch Encoder
 
-Tri-MIL currently supports the following patch encoders through the integrated preprocessing stack:
+Tri-MIL 当前通过集成预处理栈支持以下 patch encoder：
 
 | Patch Encoder | Embedding Dim | Args | Link |
 |---|---:|---|---|
@@ -95,19 +94,19 @@ Tri-MIL currently supports the following patch encoders through the integrated p
 | CTransPath-CHIEF | 768 | `--patch_encoder ctranspath --patch_size 256 --mag 10` | - |
 | ResNet50 | 1024 | `--patch_encoder resnet50 --patch_size 256 --mag 20` | - |
 
-### Slide Encoders
+### Slide Encoder
 
-Configured slide encoder support currently includes:
+当前配置的 slide encoder 包括：
 
-| Slide Encoder | Default patch encoder / dependency | Notes |
+| Slide Encoder | 默认 patch encoder / 依赖 | 说明 |
 |---|---|---|
-| `chief` | `ctranspath` | requires local CHIEF path configuration |
-| `madeleine` | `conch_v1` | requires MADELEINE dependency |
+| `chief` | `ctranspath` | 需要本地配置 CHIEF 路径 |
+| `madeleine` | `conch_v1` | 需要 MADELEINE 依赖 |
 | `gigapath` | `gigapath` | slide-level embedding workflow |
 
-## Quick Start
+## 快速开始
 
-### 1. Install
+### 1. 安装
 
 ```bash
 conda create -n tri-mil python=3.10
@@ -115,41 +114,41 @@ conda activate tri-mil
 pip install -e .
 ```
 
-### 2. Preprocess slides
+### 2. 预处理切片
 
 ```bash
 python run_batch_of_slides.py --task all --wsi_dir ./wsis --job_dir ./tri_outputs --patch_encoder uni_v1 --mag 20 --patch_size 256
 ```
 
-### 3. Train a MIL model
+### 3. 训练 MIL 模型
 
 ```bash
 python train_mil.py --yaml_path ./configs/AB_MIL.yaml
 ```
 
-### 4. Test a trained model
+### 4. 测试训练好的模型
 
 ```bash
 python test_mil.py --yaml_path ./configs/AB_MIL.yaml --test_dataset_csv /path/to/test.csv --model_weight_path /path/to/model.pth --test_log_dir /path/to/test_logs
 ```
 
-## Repository Structure
+## 仓库结构
 
-| Path | Role |
+| 路径 | 作用 |
 |---|---|
-| `trident/` | embedded preprocessing and feature extraction backend |
-| `configs/` | MIL experiment configs |
-| `modules/` | MIL model implementations |
-| `process/` | training and testing pipelines |
-| `datasets/` | example dataset CSVs |
-| `split_scripts/` | dataset split generation |
-| `vis_scripts/` | visualization utilities |
-| `draw_heatmap/` | heatmap generation |
-| `feature_extractor/` | legacy compatibility utilities |
+| `trident/` | 内嵌的预处理与特征提取后端 |
+| `configs/` | MIL 实验配置 |
+| `modules/` | MIL 模型实现 |
+| `process/` | 训练与测试流程 |
+| `datasets/` | 示例数据集 CSV |
+| `split_scripts/` | 数据集划分脚本 |
+| `vis_scripts/` | 可视化工具 |
+| `draw_heatmap/` | 热图生成 |
+| `feature_extractor/` | 兼容旧流程的特征提取工具 |
 
-## Supported MIL Models
+## 支持的 MIL 模型
 
-Tri-MIL currently includes the following MIL model configs and implementations:
+Tri-MIL 当前包含以下 MIL 模型配置与实现：
 
 | Model | Paper / Method | Venue / Year |
 |---|---|---|
@@ -201,21 +200,21 @@ Tri-MIL currently includes the following MIL model configs and implementations:
 | `DAG_MIL` | [Deformable attention graph representation learning for histopathology WSI analysis](https://ieeexplore.ieee.org/abstract/document/11464653) | ICASSP 2026 |
 | `MO_MIL` | [MoMIL: Multi-order Enhanced Multiple Instance Learning for Computational Pathology](https://www.sciencedirect.com/science/article/abs/pii/S0262885626000247) | IJCV 2026 |
 
-## Recommended Use
+## 推荐使用方式
 
-| Scenario | Recommended path |
+| 场景 | 推荐路径 |
 |---|---|
-| new WSI preprocessing pipeline | use the integrated preprocessing workflow |
-| new pathology FM feature extraction | use the embedded Trident-based feature stack |
-| MIL benchmarking or extension | use YAML configs with `train_mil.py` and `test_mil.py` |
-| result inspection | use `infer_mil.py`, `vis_scripts/`, and `draw_heatmap/` |
+| 新的 WSI 预处理流程 | 使用集成预处理工作流 |
+| 新的病理基础模型特征提取 | 使用内嵌 Trident 风格特征栈 |
+| MIL 基准测试或方法扩展 | 使用 YAML 配置配合 `train_mil.py` 与 `test_mil.py` |
+| 结果分析与解释 | 使用 `infer_mil.py`、`vis_scripts/` 和 `draw_heatmap/` |
 
-## Notes
+## 说明
 
-- `feature_extractor/` is kept mainly for backward compatibility.
-- the integrated preprocessing workflow is the recommended route going forward.
-- some encoders still require optional dependencies or gated model access.
+- `feature_extractor/` 主要用于兼容旧流程。
+- 后续推荐优先使用集成式预处理与特征提取工作流。
+- 某些 encoder 仍然需要额外依赖或 gated model 访问权限。
 
-## Acknowledgements
+## 致谢
 
-Tri-MIL is built on ideas from the broader computational pathology ecosystem, especially work around WSI preprocessing, MIL benchmarking, weak supervision, and pathology foundation models.
+Tri-MIL 受益于计算病理生态中关于 WSI 预处理、MIL benchmarking、弱监督学习与病理基础模型的大量工作。
