@@ -1,5 +1,4 @@
 import numpy as np
-import pdb
 import cv2
 import matplotlib.pyplot as plt
 from PIL import Image
@@ -18,23 +17,20 @@ def create_overlay(
     """
     Create the heatmap overlay based on scores and coordinates.
     
-    Parameters
-    ----------
-    scores : np.ndarray
-        Normalized scores.
-    coords : np.ndarray
-        Coordinates of patches.
-    patch_size_level0 : int
-        Patch size at level 0.
-    scale : np.ndarray
-        Scaling factors.
-    region_size : Tuple[int, int]
-        Dimensions of the region.
-    
-    Returns
-    -------
-    np.ndarray
-        Heatmap overlay.
+    Parameters:
+        scores (np.ndarray):
+            Normalized scores.
+        coords (np.ndarray):
+            Coordinates of patches.
+        patch_size_level0 (int):
+            Patch size at level 0.
+        scale (np.ndarray):
+            Scaling factors.
+        region_size (Tuple[int, int]):
+            Dimensions of the region.
+
+    Returns:
+        np.ndarray: Heatmap overlay.
     """
     patch_size = np.ceil(np.array([patch_size_level0, patch_size_level0]) * scale).astype(int)
     coords = np.ceil(coords * scale).astype(int)
@@ -57,17 +53,14 @@ def apply_colormap(overlay: np.ndarray, cmap_name: str) -> np.ndarray:
     """
     Apply a colormap to the heatmap overlay.
     
-    Parameters
-    ----------
-    overlay : np.ndarray
-        Heatmap overlay.
-    cmap_name : str
-        Colormap name.
+    Parameters:
+        overlay (np.ndarray):
+            Heatmap overlay.
+        cmap_name (str):
+            Colormap name.
 
-    Returns
-    -------
-    np.ndarray
-        Colored overlay image.
+    Returns:
+        np.ndarray: Colored overlay image.
     """
     cmap = plt.get_cmap(cmap_name)
     overlay_colored = np.zeros((*overlay.shape, 3), dtype=np.uint8)
@@ -86,72 +79,85 @@ def visualize_heatmap(
     cmap: str = 'coolwarm',
     normalize: bool = True,
     num_top_patches_to_save: int = -1,
-    output_dir: str = "output",
+    output_dir: Optional[str] = "output",
     vis_mag: Optional[int] = None,
     overlay_only: bool = False,
-    blur: bool = True,
-    filename: str = "heatmap.png",
-    topk_dir_name: Optional[str] = "topk_patches"
+    filename: str = 'heatmap.png'
 ) -> str:
+    """
+    Generate a heatmap visualization overlayed on a whole slide image (WSI).
+    
+    Parameters:
+        wsi (WSI):
+            Whole slide image object.
+        scores (np.ndarray):
+            Scores associated with each coordinate.
+        coords (np.ndarray):
+            Coordinates of patches at level 0.
+        patch_size_level0 (int):
+            Patch size at level 0.
+        vis_level (Optional[int]):
+            Visualization level.
+        cmap (str):
+            Colormap to use for the heatmap.
+        normalize (bool):
+            Whether to normalize the scores.
+        num_top_patches_to_save (int):
+            Number of high-score patches to save. If set to -1, do not save any. Defaults to -1.
+        output_dir (Optional[str]):
+            Directory to save heatmap and top-k patches.
+        vis_mag (Optional[int]):
+            Visualization magnification. This overwrites `vis_level`.
+        overlay_only (bool):
+            Whether to save the overlay only. If True, saves the overlay on top of a downscaled version of the WSI.
+            Defaults to False.
+        filename (str):
+            File will be saved in `output_dir`/`filename`.
+
+    Returns:
+        str: Path to the saved heatmap image.
+    """
 
     if normalize:
         from scipy.stats import rankdata
-        scores = rankdata(scores) / len(scores)
-
+        scores = rankdata(scores, 'average') / len(scores) * 100 / 100
+    
     if vis_mag is None:
         downsample = wsi.level_downsamples[vis_level]
     else:
-        downsample = wsi.mag / vis_mag
+        src_mag = wsi.mag
+        downsample = src_mag / vis_mag
         if not overlay_only:
             vis_level, _ = wsi.get_best_level_and_custom_downsample(downsample)
-
+    
     scale = np.array([1 / downsample, 1 / downsample])
     region_size = tuple((np.array(wsi.level_dimensions[0]) * scale).astype(int))
-
-    overlay = create_overlay(
-        scores, coords, patch_size_level0, scale, region_size
-    )
+    overlay = create_overlay(scores, coords, patch_size_level0, scale, region_size)
 
     overlay_colored = apply_colormap(overlay, cmap)
-
-    if blur:
-        ksize = int(np.ceil(patch_size_level0 * scale[0]))
-        ksize = max(3, ksize // 2 * 2 + 1)
-        ksize = (ksize, ksize)
-
-        overlay_colored = cv2.GaussianBlur(overlay_colored, ksize, 0)
-
+    
     if overlay_only:
-        blended = overlay_colored
+        blended_img = overlay_colored
     else:
-        img = wsi.read_region(
-            (0, 0),
-            vis_level,
-            wsi.level_dimensions[vis_level]
-        ).convert("RGB")
-
-        img = img.resize(region_size, Image.Resampling.BICUBIC)
+        img = wsi.read_region((0, 0), vis_level, wsi.level_dimensions[vis_level]).convert("RGB")
+        img = img.resize(region_size, resample=Image.Resampling.BICUBIC)
         img = np.array(img)
-
-        blended = cv2.addWeighted(img, 0.6, overlay_colored, 0.4, 0)
+        
+        blended_img = cv2.addWeighted(img, 0.6, overlay_colored, 0.4, 0)
+    
+    blended_img = Image.fromarray(blended_img)
 
     os.makedirs(output_dir, exist_ok=True)
-    save_path = os.path.join(output_dir, filename)
-    Image.fromarray(blended).save(save_path)
+    heatmap_path = os.path.join(output_dir, filename)
+    blended_img.save(heatmap_path)
 
     if num_top_patches_to_save > 0:
-        topk_dir = os.path.join(output_dir, topk_dir_name)
+        topk_dir = os.path.join(output_dir, "topk_patches")
         os.makedirs(topk_dir, exist_ok=True)
-
-        topk_idx = np.argsort(scores)[-num_top_patches_to_save:]
-        for rank, i in enumerate(topk_idx):
+        topk_indices = np.argsort(scores)[-num_top_patches_to_save:]
+        for idx, i in enumerate(topk_indices):
             x, y = coords[i]
-            patch = wsi.read_region(
-                (int(x), int(y)), 0,
-                (patch_size_level0, patch_size_level0)
-            )
-            patch.save(
-                os.path.join(topk_dir, f"top{rank}_score_{scores[i]:.4f}.png")
-            )
+            patch = wsi.read_region((x, y), 0, (patch_size_level0, patch_size_level0))
+            patch.save(os.path.join(topk_dir, f"top_{idx}_score_{scores[i]:.4f}.png"))
 
-    return save_path
+    return heatmap_path

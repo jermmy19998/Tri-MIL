@@ -3,6 +3,7 @@ from __future__ import annotations
 import torch
 import socket
 import os
+import time
 import json
 from typing import List, Optional, Union, Tuple
 import h5py
@@ -11,6 +12,18 @@ import cv2
 import pandas as pd
 from geopandas import gpd
 from shapely import Polygon
+
+
+COMPOUND_EXTENSIONS = {'.ome.tif', '.ome.tiff', '.ome.zarr'}
+
+
+def splitext(path: str) -> tuple:
+    """Like os.path.splitext but handles compound extensions (e.g., .ome.tif)."""
+    path_lower = path.lower()
+    for ext in COMPOUND_EXTENSIONS:
+        if path_lower.endswith(ext):
+            return path[:-len(ext)], path[-len(ext):]
+    return os.path.splitext(path)
 
 
 ENV_TRIDENT_HOME = "TRIDENT_HOME"
@@ -30,30 +43,27 @@ def collect_valid_slides(
     """
     Retrieve all valid WSI file paths from a directory, optionally filtered by a custom list.
 
-    Parameters
-    ----------
-    wsi_dir : str
-        Path to the directory containing WSIs.
-    custom_list_path : Optional[str]
-        Path to a CSV file with 'wsi' column of relative slide paths.
-    wsi_ext : Optional[List[str]]
-        Allowed file extensions.
-    search_nested : bool
-        Whether to search subdirectories.
-    max_workers : int
-        Threads to use when checking file existence.
-    return_relative_paths : bool
-        Whether to also return relative paths.
+    Parameters:
+        wsi_dir (str):
+            Path to the directory containing WSIs.
+        custom_list_path (Optional[str]):
+            Path to a CSV file with 'wsi' column of relative slide paths.
+        wsi_ext (Optional[List[str]]):
+            Allowed file extensions.
+        search_nested (bool):
+            Whether to search subdirectories.
+        max_workers (int):
+            Threads to use when checking file existence.
+        return_relative_paths (bool):
+            Whether to also return relative paths.
 
-    Returns
-    -------
-    Union[List[str], Tuple[List[str], List[str]]]
-        Full paths to valid WSIs, or (full paths, relative paths) if return_relative_paths is True.
-    
-    Raises
-    ------
-    ValueError
-        If custom CSV is invalid or files not found.
+    Returns:
+        Union[List[str], Tuple[List[str], List[str]]]:
+            Full paths to valid WSIs, or (full paths, relative paths) if return_relative_paths is True.
+
+    Raises:
+        ValueError:
+            If custom CSV is invalid or files not found.
     """
     valid_rel_paths: List[str] = []
 
@@ -131,10 +141,9 @@ def set_dir(d: Union[str, os.PathLike]) -> None:
     r"""
     Optionally set the Trident cache directory used to save downloaded models & weights.
     
-    Parameters
-    ----------
-    d : Union[str, os.PathLike]
-        Path to a local folder to save downloaded models & weights.
+    Parameters:
+        d (Union[str, os.PathLike]):
+            Path to a local folder to save downloaded models & weights.
     """
     global _cache_dir
     _cache_dir = os.path.expanduser(d)
@@ -159,8 +168,8 @@ def has_internet_connection(timeout: float = 3.0) -> bool:
     
     try:
         # Fast socket-level check
-        socket.create_connection((endpoint, 443), timeout=timeout)
-        return True
+        with socket.create_connection((endpoint, 443), timeout=timeout):
+            return True
     except OSError:
         pass
 
@@ -174,7 +183,7 @@ def has_internet_connection(timeout: float = 3.0) -> bool:
         return False
 
 
-def get_weights_path(model_type: str, encoder_name: str) -> str:
+def  get_weights_path(model_type: str, encoder_name: str) -> str:
     """
     Retrieve the path to the weights file for a given model name.
     This function looks up the path to the weights file in a local checkpoint
@@ -182,17 +191,14 @@ def get_weights_path(model_type: str, encoder_name: str) -> str:
     returns that path. If the path is relative, it joins the relative path with
     the provided weights_root directory.
     
-    Parameters
-    ----------
-    model_type : str
-        The type of model ('patch', 'slide', or 'seg').
-    encoder_name : str
-        The name of the model whose weights path is to be retrieved.
-        
-    Returns
-    -------
-    str
-        The absolute path to the weights file.
+    Parameters:
+        model_type (str):
+            The type of model ('patch', 'slide', or 'seg').
+        encoder_name (str):
+            The name of the model whose weights path is to be retrieved.
+
+    Returns:
+        str: The absolute path to the weights file.
     """
 
     assert model_type in ['patch', 'slide', 'seg'], f"Encoder type must be 'patch' or 'slide' or 'seg', not '{model_type}'"
@@ -221,16 +227,15 @@ def create_lock(path: str, suffix: Optional[str] = None) -> None:
     is currently being worked on. This is especially useful in multiprocessing or distributed 
     systems to avoid conflicts or multiple processes working on the same resource.
 
-    Parameters
-    ----------
-    path : str
-        The path to the file or resource being locked.
-    suffix : str, optional
-        An additional suffix to append to the lock file name. This allows for creating distinct 
-        lock files for similar resources. Defaults to None.
+    Parameters:
+        path (str):
+            The path to the file or resource being locked.
+        suffix (str, optional):
+            An additional suffix to append to the lock file name. This allows for creating distinct
+            lock files for similar resources. Defaults to None.
 
-    Examples
-    --------
+    Example
+    -------
     >>> create_lock("/path/to/resource")
     >>> # Creates a file named "/path/to/resource.lock" to indicate the resource is locked.
     """
@@ -238,7 +243,13 @@ def create_lock(path: str, suffix: Optional[str] = None) -> None:
         path = f"{path}_{suffix}"
     lock_file = f"{path}.lock"
     with open(lock_file, 'w') as f:
-        f.write("")
+        # Write metadata to allow safe dead-lock cleanup.
+        payload = {
+            "pid": os.getpid(),
+            "hostname": socket.gethostname(),
+            "created_at": time.time(),
+        }
+        f.write(json.dumps(payload))
 
 #####################
 
@@ -247,22 +258,26 @@ def remove_lock(path: str, suffix: Optional[str] = None) -> None:
     Remove a lock file, signaling that the file or process 
     is no longer in use and is available for other operations.
 
-    Parameters
-    ----------
-    path : str
-        The path to the file or resource whose lock needs to be removed.
-    suffix : str, optional
-        An additional suffix to identify the lock file. Defaults to None.
+    Parameters:
+        path (str):
+            The path to the file or resource whose lock needs to be removed.
+        suffix (str, optional):
+            An additional suffix to identify the lock file. Defaults to None.
 
-    Examples
-    --------
+    Example
+    -------
     >>> remove_lock("/path/to/resource")
     >>> # Removes the file "/path/to/resource.lock", indicating the resource is unlocked.
     """
     if suffix is not None:
         path = f"{path}_{suffix}"
     lock_file = f"{path}.lock"
-    os.remove(lock_file)
+    # Locks are best-effort markers; be tolerant if it is already gone.
+    try:
+        if os.path.exists(lock_file):
+            os.remove(lock_file)
+    except Exception:
+        pass
 
 #####################
 
@@ -271,20 +286,17 @@ def is_locked(path: str, suffix: Optional[str] = None) -> bool:
     Check if a resource is currently locked by verifying 
     the existence of a `.lock` file.
 
-    Parameters
-    ----------
-    path : str
-        The path to the file or resource to check for a lock.
-    suffix : str, optional
-        An additional suffix to identify the lock file. Defaults to None.
+    Parameters:
+        path (str):
+            The path to the file or resource to check for a lock.
+        suffix (str, optional):
+            An additional suffix to identify the lock file. Defaults to None.
 
-    Returns
+    Returns:
+        bool: True if the `.lock` file exists (resource is locked), False otherwise.
+
+    Example
     -------
-    bool
-        True if the `.lock` file exists, indicating the resource is locked. False otherwise.
-
-    Examples
-    --------
     >>> is_locked("/path/to/resource")
     False
     >>> create_lock("/path/to/resource")
@@ -294,6 +306,111 @@ def is_locked(path: str, suffix: Optional[str] = None) -> bool:
     if suffix is not None:
         path = f"{path}_{suffix}"
     return os.path.exists(f"{path}.lock")
+
+
+def _pid_is_running(pid: int) -> bool:
+    """
+    Check whether a PID is alive on this host.
+    """
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # PID exists but we may not have permission; assume it's running.
+        return True
+    except Exception:
+        return False
+    return True
+
+
+def clear_dead_locks(root_dir: str, *, legacy_max_age_seconds: float = 24 * 3600) -> dict:
+    """
+    Remove stale `.lock` files under `root_dir`.
+
+    Rules (conservative):
+    - If `<output>` exists next to `<output>.lock`, the lock is stale → remove it.
+    - If the lock file contains JSON with a PID and hostname matching this host:
+        - remove only if PID is not running.
+    - Otherwise (legacy empty lock / unreadable / other-host):
+        - remove only if older than `legacy_max_age_seconds`.
+
+    Returns stats: {"scanned": int, "removed": int, "kept": int}.
+    """
+    scanned = removed = kept = 0
+    now = time.time()
+    host = socket.gethostname()
+
+    if not os.path.isdir(root_dir):
+        return {"scanned": 0, "removed": 0, "kept": 0}
+
+    for dirpath, _dirnames, filenames in os.walk(root_dir):
+        for fn in filenames:
+            if not fn.endswith(".lock"):
+                continue
+            lock_fp = os.path.join(dirpath, fn)
+            scanned += 1
+
+            target_fp = lock_fp[:-5]  # strip ".lock"
+            try:
+                if os.path.exists(target_fp):
+                    os.remove(lock_fp)
+                    removed += 1
+                    continue
+
+                # Try to parse metadata.
+                pid = None
+                lock_host = None
+                created_at = None
+                try:
+                    with open(lock_fp, "r") as f:
+                        raw = (f.read() or "").strip()
+                    if raw:
+                        data = json.loads(raw)
+                        pid = data.get("pid")
+                        lock_host = data.get("hostname")
+                        created_at = data.get("created_at")
+                except Exception:
+                    pid = None
+                    lock_host = None
+                    created_at = None
+
+                if pid is not None and lock_host == host:
+                    try:
+                        pid_int = int(pid)
+                    except Exception:
+                        pid_int = None
+                    if pid_int is not None and not _pid_is_running(pid_int):
+                        os.remove(lock_fp)
+                        removed += 1
+                        continue
+                    kept += 1
+                    continue
+
+                # Legacy/unknown-host: age-based cleanup.
+                try:
+                    mtime = os.path.getmtime(lock_fp)
+                except Exception:
+                    mtime = None
+
+                age_ref = None
+                if created_at is not None:
+                    try:
+                        age_ref = float(created_at)
+                    except Exception:
+                        age_ref = None
+                if age_ref is None and mtime is not None:
+                    age_ref = float(mtime)
+
+                if age_ref is not None and (now - age_ref) >= legacy_max_age_seconds:
+                    os.remove(lock_fp)
+                    removed += 1
+                else:
+                    kept += 1
+            except Exception:
+                kept += 1
+
+    return {"scanned": scanned, "removed": removed, "kept": kept}
 
 
 ###########################################################################
@@ -539,8 +656,18 @@ def coords_to_h5(
     overlap
 ):
     """ Save tissue coordinates to .h5 """
+    coords_array = np.asarray(coords, dtype=np.int64)
+    if coords_array.size == 0:
+        coords_array = coords_array.reshape(0, 2)
+    elif coords_array.ndim == 1 and coords_array.shape[0] == 2:
+        coords_array = coords_array.reshape(1, 2)
+    elif coords_array.ndim != 2 or coords_array.shape[1] != 2:
+        raise ValueError(
+            f"coords must have shape (N, 2). Got shape {coords_array.shape}."
+        )
+
     # Prepare assets for saving
-    assets = {'coords' : np.array(coords)}
+    assets = {'coords' : coords_array}
     attributes = {
         'patch_size': patch_size, # Reference frame: patch_level
         'patch_size_level0': patch_size * src_mag // target_mag, # Reference frame: level0
@@ -908,6 +1035,9 @@ def get_num_workers(batch_size: int,
 
     # Disable pytorch multiprocessing on Windows
     if os.name == 'nt':
+        return 0
+
+    if max_workers is not None and max_workers <= 0:
         return 0
     
     num_cores = os.cpu_count() or fallback
