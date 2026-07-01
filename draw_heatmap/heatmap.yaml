@@ -1,0 +1,57 @@
+# =============================
+# basic
+# =============================
+job_dir: ./heatmap_viz
+device: cuda:1
+
+# =============================
+# WSI input
+# =============================
+wsi:
+  wsi_dir: ../data
+  extensions: [".svs", ".tif", ".tiff"]
+
+# =============================
+# Precomputed features (optional)
+# 如果两个路径都存在 → 跳过 segmentation / feature extraction
+# 留空字符串 = 不使用预计算
+# =============================
+precomputed:
+  feature_path: ""
+  coord_path: ""
+
+# =============================
+# Segmentation
+# =============================
+segmentation:
+  model_name: hest
+
+# =============================
+# Patch coordinate extraction
+# =============================
+patch_coords:
+  target_mag: 20
+  patch_size: 256
+  overlap: 128
+
+# =============================
+# Patch encoder
+# =============================
+patch_encoder:
+  model_name: resnet50
+
+# =============================
+# MIL model 
+# =============================
+model:
+  yaml_path: ./configs/AB_MIL.yaml      # 你的 MIL 配置
+  ckpt_path: ./log_dir/TCGA/AB_MIL/time_2026-02-12-23-57_TCGA_AB_MIL_seed_2024/fold_1/Best_EPOCH_2.pth    # 你的模型权重
+
+# =============================
+# Heatmap visualization
+# =============================
+visualization:
+  vis_level: 0
+  normalize: true
+  blur: true
+  num_top_patches_to_save: 10

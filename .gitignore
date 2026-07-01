@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+log_dir/
+
+datasets/*
+!datasets/README.md
+
+.DS_Store
+Thumbs.db
