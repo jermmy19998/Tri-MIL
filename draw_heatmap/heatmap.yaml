@@ -9,7 +9,10 @@ device: cuda:1
 # =============================
 wsi:
   wsi_dir: ../data
-  extensions: [".svs", ".tif", ".tiff"]
+  extensions: [".svs", ".tif", ".tiff", ".png", ".jpg", ".jpeg"]
+  reader_type: null
+  mpp: null
+  custom_mpp_keys: []
 
 # =============================
 # Precomputed features (optional)

@@ -78,7 +78,58 @@ conda activate tri-mil
 pip install -e .
 ```
 
-### 2. 预处理与特征提取
+### 2. 最简单的推理流程
+
+如果你已经有一个特征文件夹，现在不需要先手工生成 `test.csv`。
+
+```bash
+python tri_mil.py infer \
+  --yaml_path ./configs/TRANS_MIL.yaml \
+  --model_weight_path /path/to/model.pth \
+  --feature_dir ./tri_outputs/20x_256px_0px_overlap/features_vit \
+  --test_log_dir ./infer_out \
+  --no_label
+```
+
+现在这条命令会自动帮你：
+
+- 根据 `--feature_dir` 生成内部推理 CSV
+- 从特征文件自动推断 `Model.in_dim`
+- 自动选择更安全的运行设备并做回退
+- 常见推理场景下不再需要手改 YAML
+
+如果你已经有 CSV，旧用法仍然可用：
+
+```bash
+python infer_mil.py \
+  --yaml_path ./configs/TRANS_MIL.yaml \
+  --test_dataset_csv ./test.csv \
+  --model_weight_path /path/to/model.pth \
+  --test_log_dir ./infer_out \
+  --no_label
+```
+
+### 3. 最简单的热图流程
+
+如果你已经有预计算好的特征和坐标，现在不需要每次都去改 `draw_heatmap/heatmap.yaml`。
+
+```bash
+python tri_mil.py heatmap \
+  --wsi_dir ./wsis \
+  --feature_dir ./tri_outputs/20x_256px_0px_overlap/features_vit \
+  --coord_dir ./tri_outputs/20x_256px_0px_overlap/patches \
+  --model_yaml ./configs/TRANS_MIL.yaml \
+  --model_ckpt /path/to/model.pth \
+  --job_dir ./heatmap_out \
+  --mpp 0.5 \
+  --reader_type image \
+  --blur
+```
+
+这对 `.png/.jpg` 输入，以及“特征和 patch 坐标已经准备好”的情况尤其方便。
+如果原图放在多级子目录下，现在热图输出会自动带上原图的相对文件夹前缀，避免不同子目录里的同名切片互相覆盖。
+
+### 4. 预处理与特征提取
 
 普通目录：
 
@@ -92,7 +143,47 @@ python run_batch_of_slides.py --task all --wsi_dir ./wsis --job_dir ./tri_output
 python run_batch_of_slides.py --task all --wsi_dir ./wsis --job_dir ./tri_outputs --patch_encoder vit --mag 20 --patch_size 256 --search_nested
 ```
 
-### 3. 生成数据集 CSV
+### 5. 最简单的训练流程
+
+现在训练也可以直接从“特征目录 + 一种标签来源”开始，不需要你手工生成 `train_base.csv`、fold CSV，也不需要手改 YAML 里的数据路径。
+
+特征目录 + reference CSV：
+
+```bash
+python tri_mil.py train \
+  --yaml_path ./configs/TRANS_MIL.yaml \
+  --feature_dir ./tri_outputs/20x_256px_0px_overlap/features_vit \
+  --reference_csv ./labels.csv \
+  --slide_col slide_id \
+  --label_col label \
+  --dataset_name MY_DATASET \
+  --output_dir ./train_workspace \
+  --k 3
+```
+
+特征目录 + 原始数据标签子文件夹：
+
+```bash
+python tri_mil.py train \
+  --yaml_path ./configs/TRANS_MIL.yaml \
+  --feature_dir ./tri_outputs/20x_256px_0px_overlap/features_vit \
+  --source_dir ./wsis \
+  --dataset_name MY_DATASET \
+  --output_dir ./train_workspace \
+  --source_recursive \
+  --k 3
+```
+
+现在会自动完成：
+
+- 生成内部训练 CSV
+- 生成 k-fold CSV
+- 自动推断 `Model.in_dim`
+- 自动推断 `General.num_classes`
+- 写出 `label_map.json`
+- 自动补齐运行时 YAML，避免手工改数据路径
+
+### 6. 如有需要再手工生成数据集 CSV
 
 现在统一使用 `prepare_dataset_csv.py`，不再区分旧的 `gen_train_csv.py` 和 `gen_test_csv.py`。
 
@@ -137,7 +228,7 @@ python prepare_dataset_csv.py \
   --output_csv ./test.csv
 ```
 
-### 4. 训练前做 fold 划分
+### 7. 训练前做 fold 划分
 
 训练脚本仍然需要 fold CSV，所以把 `train_base.csv` 再转一次：
 
@@ -148,13 +239,13 @@ python ./split_scripts/split_datasets_k_fold_train_val.py \
   --save_dir ./datasets
 ```
 
-### 5. 训练 MIL 模型
+### 8. 手工训练 MIL 模型
 
 ```bash
 python train_mil.py --yaml_path ./configs/AB_MIL.yaml
 ```
 
-### 6. 推理或测试
+### 9. 推理或测试
 
 有标签测试：
 

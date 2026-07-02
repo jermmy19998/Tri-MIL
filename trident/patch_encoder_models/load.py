@@ -25,6 +25,100 @@ RESIZE_SUPPORTED_PATCH_ENCODERS = frozenset({
 })
 
 
+def _strip_state_dict_prefixes(state_dict: Dict[str, Any], prefixes: tuple[str, ...]) -> Dict[str, Any]:
+    normalized = {}
+    for key, value in state_dict.items():
+        new_key = key
+        changed = True
+        while changed:
+            changed = False
+            for prefix in prefixes:
+                if new_key.startswith(prefix):
+                    new_key = new_key[len(prefix):]
+                    changed = True
+        normalized[new_key] = value
+    return normalized
+
+
+def _extract_checkpoint_state_dict(checkpoint: Any) -> Dict[str, Any]:
+    if not isinstance(checkpoint, dict):
+        raise ValueError(f"Expected checkpoint to be a dict, got {type(checkpoint)}")
+
+    candidate_keys = (
+        "state_dict",
+        "model",
+        "student",
+        "teacher",
+        "network",
+        "module",
+    )
+    for key in candidate_keys:
+        value = checkpoint.get(key)
+        if isinstance(value, dict):
+            checkpoint = value
+            break
+
+    if not isinstance(checkpoint, dict):
+        raise ValueError("Could not extract a valid state_dict from checkpoint")
+
+    checkpoint = _strip_state_dict_prefixes(
+        checkpoint,
+        prefixes=(
+            "module.",
+            "model.",
+            "student.",
+            "teacher.",
+            "backbone.",
+            "encoder.",
+            "base_encoder.",
+            "momentum_encoder.",
+            "online_encoder.",
+            "target_encoder.",
+            "trunk.",
+        ),
+    )
+
+    # Drop heads/projectors so plain timm ViT backbones can still load feature weights.
+    filtered = {}
+    skip_prefixes = (
+        "head.",
+        "fc.",
+        "classifier.",
+        "proj.",
+        "predictor.",
+        "projection_head.",
+        "mlp_head.",
+    )
+    for key, value in checkpoint.items():
+        if any(key.startswith(prefix) for prefix in skip_prefixes):
+            continue
+        filtered[key] = value
+
+    return filtered
+
+
+def _load_local_checkpoint(weights_path: str) -> Dict[str, Any]:
+    load_errors = []
+    for weights_only in (False, True):
+        try:
+            checkpoint = torch.load(weights_path, map_location="cpu", weights_only=weights_only)
+            return _extract_checkpoint_state_dict(checkpoint)
+        except TypeError as exc:
+            load_errors.append(exc)
+            try:
+                checkpoint = torch.load(weights_path, map_location="cpu")
+                return _extract_checkpoint_state_dict(checkpoint)
+            except Exception as inner_exc:
+                load_errors.append(inner_exc)
+        except Exception as exc:
+            load_errors.append(exc)
+
+    raise RuntimeError(
+        "Failed to load checkpoint. Errors: "
+        + " | ".join(str(err) for err in load_errors[:3])
+    )
+
+
 def _resolve_target_img_size(enc_name: str, target_img_size: Optional[int], default_img_size: int, patch_size: int) -> int:
     """
     Validate and resolve a user-requested patch-encoder input resolution.
@@ -810,8 +904,20 @@ class ViTSmallInferenceEncoder(BasePatchEncoder):
                     pretrained=False,
                     **timm_kwargs,
                 )
-                state_dict = torch.load(weights_path, map_location="cpu")
-                model.load_state_dict(state_dict, strict=True)
+                state_dict = _load_local_checkpoint(weights_path)
+                missing, unexpected = model.load_state_dict(state_dict, strict=False)
+                allowed_missing_prefixes = ("head.", "fc.", "classifier.")
+                real_missing = [
+                    key for key in missing
+                    if not any(key.startswith(prefix) for prefix in allowed_missing_prefixes)
+                ]
+                if real_missing:
+                    raise RuntimeError(
+                        "Checkpoint is incompatible with vit_small_patch16_224. "
+                        f"Missing keys example: {real_missing[:10]}"
+                    )
+                if unexpected:
+                    print(f"[ViT] Ignored unexpected checkpoint keys: {unexpected[:10]}")
             except:
                 traceback.print_exc()
                 raise Exception(

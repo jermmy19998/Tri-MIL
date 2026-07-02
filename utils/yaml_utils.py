@@ -1,9 +1,14 @@
 import yaml
 from addict import Dict
-from ruamel.yaml import YAML
-import ruamel.yaml as ryaml
 import shutil
 import os
+
+try:
+    from ruamel.yaml import YAML as RuamelYAML
+except ImportError:
+    RuamelYAML = None
+
+
 def read_yaml(fpath=None):
     with open(fpath, mode="r") as file:
         yml = yaml.load(file, Loader=yaml.Loader)
@@ -19,13 +24,26 @@ def update_config_from_options(config, options):
         d[keys[-1]] = type(d[keys[-1]])(value)
     return config
 
-
-from ruamel.yaml import YAML
-
 def change_yaml_by_options(yaml_path, options):
-    Yaml = YAML(typ='rt') 
+    if RuamelYAML is not None:
+        yaml_handler = RuamelYAML(typ='rt')
+        with open(yaml_path, 'r', encoding='utf-8') as file:
+            config = yaml_handler.load(file)
+
+        for option in options:
+            key, value = option.split('=')
+            keys = key.split('.')
+            d = config
+            for k in keys[:-1]:
+                d = d[k]
+            d[keys[-1]] = type(d[keys[-1]])(value)
+
+        with open(yaml_path, 'w', encoding='utf-8') as file:
+            yaml_handler.dump(config, file)
+        return
+
     with open(yaml_path, 'r', encoding='utf-8') as file:
-        config = Yaml.load(file)  
+        config = yaml.safe_load(file)
 
     for option in options:
         key, value = option.split('=')
@@ -33,10 +51,10 @@ def change_yaml_by_options(yaml_path, options):
         d = config
         for k in keys[:-1]:
             d = d[k]
-        d[keys[-1]] = type(d[keys[-1]])(value)  
+        d[keys[-1]] = type(d[keys[-1]])(value)
 
     with open(yaml_path, 'w', encoding='utf-8') as file:
-        Yaml.dump(config, file) 
+        yaml.safe_dump(config, file, sort_keys=False, allow_unicode=True)
 
 
 

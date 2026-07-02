@@ -116,7 +116,58 @@ conda activate tri-mil
 pip install -e .
 ```
 
-### 2. Preprocess slides
+### 2. Simplest inference workflow
+
+If you already have extracted features in one folder, you no longer need to manually prepare `test.csv` first.
+
+```bash
+python tri_mil.py infer \
+  --yaml_path ./configs/TRANS_MIL.yaml \
+  --model_weight_path /path/to/model.pth \
+  --feature_dir ./tri_outputs/20x_256px_0px_overlap/features_vit \
+  --test_log_dir ./infer_out \
+  --no_label
+```
+
+What this now does for you automatically:
+
+- generates an internal inference CSV from `--feature_dir`
+- infers `Model.in_dim` from the first feature file
+- picks a safe runtime device with fallback
+- avoids manual YAML editing for common inference cases
+
+If you already have a CSV, you can still use the old style:
+
+```bash
+python infer_mil.py \
+  --yaml_path ./configs/TRANS_MIL.yaml \
+  --test_dataset_csv ./test.csv \
+  --model_weight_path /path/to/model.pth \
+  --test_log_dir ./infer_out \
+  --no_label
+```
+
+### 3. Simplest heatmap workflow
+
+If you already have precomputed features and coordinates, you no longer need to keep editing `draw_heatmap/heatmap.yaml` for every run.
+
+```bash
+python tri_mil.py heatmap \
+  --wsi_dir ./wsis \
+  --feature_dir ./tri_outputs/20x_256px_0px_overlap/features_vit \
+  --coord_dir ./tri_outputs/20x_256px_0px_overlap/patches \
+  --model_yaml ./configs/TRANS_MIL.yaml \
+  --model_ckpt /path/to/model.pth \
+  --job_dir ./heatmap_out \
+  --mpp 0.5 \
+  --reader_type image \
+  --blur
+```
+
+This is especially useful for `.png/.jpg` inputs and for the case where features and patch coordinates are already prepared.
+If your input slides live under nested folders, Tri-MIL now automatically prefixes each heatmap output with the original relative folder name to avoid collisions between slides with the same basename.
+
+### 4. Preprocess slides
 
 ```bash
 python run_batch_of_slides.py --task all --wsi_dir ./wsis --job_dir ./tri_outputs --patch_encoder uni_v1 --mag 20 --patch_size 256
@@ -128,7 +179,47 @@ If your WSIs are stored under label subfolders, add `--search_nested`:
 python run_batch_of_slides.py --task all --wsi_dir ./wsis --job_dir ./tri_outputs --patch_encoder vit --mag 20 --patch_size 256 --search_nested
 ```
 
-### 3. Prepare dataset CSVs
+### 5. Simplest training workflow
+
+You can now train directly from a feature folder plus one label source, without manually creating `train_base.csv`, fold CSVs, or editing YAML dataset paths.
+
+Feature folder + reference CSV:
+
+```bash
+python tri_mil.py train \
+  --yaml_path ./configs/TRANS_MIL.yaml \
+  --feature_dir ./tri_outputs/20x_256px_0px_overlap/features_vit \
+  --reference_csv ./labels.csv \
+  --slide_col slide_id \
+  --label_col label \
+  --dataset_name MY_DATASET \
+  --output_dir ./train_workspace \
+  --k 3
+```
+
+Feature folder + label subfolders in the raw-data directory:
+
+```bash
+python tri_mil.py train \
+  --yaml_path ./configs/TRANS_MIL.yaml \
+  --feature_dir ./tri_outputs/20x_256px_0px_overlap/features_vit \
+  --source_dir ./wsis \
+  --dataset_name MY_DATASET \
+  --output_dir ./train_workspace \
+  --source_recursive \
+  --k 3
+```
+
+This now happens automatically:
+
+- builds the internal labeled training CSV
+- generates k-fold CSVs
+- infers `Model.in_dim`
+- infers `General.num_classes`
+- writes `label_map.json`
+- patches the runtime YAML so you do not need to edit dataset paths by hand
+
+### 6. Prepare dataset CSVs manually if needed
 
 Tri-MIL now uses one script, `prepare_dataset_csv.py`, for both training and inference CSV generation.
 
@@ -182,13 +273,13 @@ python ./split_scripts/split_datasets_k_fold_train_val.py \
   --save_dir ./datasets
 ```
 
-### 4. Train a MIL model
+### 7. Train a MIL model manually
 
 ```bash
 python train_mil.py --yaml_path ./configs/AB_MIL.yaml
 ```
 
-### 5. Test a trained model
+### 8. Test a trained model
 
 ```bash
 python test_mil.py --yaml_path ./configs/AB_MIL.yaml --test_dataset_csv /path/to/test.csv --model_weight_path /path/to/model.pth --test_log_dir /path/to/test_logs

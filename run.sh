@@ -14,54 +14,45 @@ nohup python run_batch_of_slides.py \
   > ./processed.log 2>&1 &
 
 
-# Case 1:
-# Flat feature directory + reference CSV
-python prepare_dataset_csv.py \
-  --mode train_flat \
+# Folder-first training with reference CSV
+python tri_mil.py train \
+  --yaml_path ./configs/AB_MIL.yaml \
+  --feature_dir ./trident_processed/20x_256px_0px_overlap/features_vit \
   --reference_csv ../tcga_brca_all_clean.csv \
   --slide_col slide_id \
   --label_col label \
-  --feature_dir ./trident_processed/20x_256px_0px_overlap/features_vit \
-  --output_csv ./train_base.csv
-
-# Case 2:
-# Raw WSI directory contains label subfolders, features are stored flat after extraction
-# python prepare_dataset_csv.py \
-#   --mode train_label_dirs \
-#   --source_dir ../data \
-#   --feature_dir ./trident_processed/20x_256px_0px_overlap/features_vit \
-#   --output_csv ./train_base.csv \
-#   --source_recursive
-
-# Case 3:
-# Feature directory itself already contains label subfolders
-# python prepare_dataset_csv.py \
-#   --mode train_label_dirs \
-#   --feature_dir ./labeled_features \
-#   --output_csv ./train_base.csv
-
-# Build k-fold training CSVs from slide_path,label
-python ./split_scripts/split_datasets_k_fold_train_val.py \
-  --csv_path ./train_base.csv \
   --dataset_name TCGA \
-  --save_dir ./datasets
+  --output_dir ./train_workspace \
+  --k 3
 
-# Train
-python train_mil.py --yaml_path ./configs/AB_MIL.yaml
+# Folder-first training with label subfolders in raw WSI directory
+# python tri_mil.py train \
+#   --yaml_path ./configs/AB_MIL.yaml \
+#   --feature_dir ./trident_processed/20x_256px_0px_overlap/features_vit \
+#   --source_dir ../data \
+#   --dataset_name TCGA \
+#   --output_dir ./train_workspace \
+#   --source_recursive \
+#   --k 3
+
+# Manual fallback: prepare CSVs and run train_mil.py directly if you need the old workflow
 
 # Inference CSV from a plain feature folder
-python prepare_dataset_csv.py \
-  --mode infer \
-  --feature_dir ./trident_processed/20x_256px_0px_overlap/features_vit \
-  --output_csv ./test.csv
-
-# No-label inference
-python infer_mil.py \
+# Folder-first no-label inference
+python tri_mil.py infer \
   --yaml_path ./configs/AB_MIL.yaml \
-  --test_dataset_csv ./test.csv \
   --model_weight_path ./log_dir/TCGA/AB_MIL/time_2026-02-12-23-57_TCGA_AB_MIL_seed_2024/fold_1/Best_EPOCH_2.pth \
+  --feature_dir ./trident_processed/20x_256px_0px_overlap/features_vit \
   --test_log_dir ./test_nolabel \
   --no_label
 
-# Heatmap
-python ./draw_heatmap/draw_heatmap.py --config ./draw_heatmap/heatmap.yaml
+# Folder-first heatmap generation
+# If your WSIs are png/jpg, set --reader_type image and provide --mpp.
+python tri_mil.py heatmap \
+  --wsi_dir ../data \
+  --feature_dir ./trident_processed/20x_256px_0px_overlap/features_vit \
+  --coord_dir ./trident_processed/20x_256px_0px_overlap/patches \
+  --model_yaml ./configs/AB_MIL.yaml \
+  --model_ckpt ./log_dir/TCGA/AB_MIL/time_2026-02-12-23-57_TCGA_AB_MIL_seed_2024/fold_1/Best_EPOCH_2.pth \
+  --job_dir ./heatmap_viz \
+  --blur
