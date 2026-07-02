@@ -27,7 +27,7 @@ Its goal is to turn them into one practical workflow for weakly supervised whole
 | Preprocessing | Read WSIs, segment tissue, generate patch coordinates, extract patch/slide features | `trident/`, `run_batch_of_slides.py`, `run_single_slide.py` |
 | Training | Train MIL models with a unified config-based interface | `configs/`, `modules/`, `process/`, `train_mil.py` |
 | Evaluation | Test checkpoints and export metrics / inference outputs | `test_mil.py`, `infer_mil.py` |
-| Utilities | Build dataset splits and visualize learned behavior | `split_scripts/`, `vis_scripts/`, `draw_heatmap/` |
+| Utilities | Prepare dataset CSVs, build splits, and visualize learned behavior | `prepare_dataset_csv.py`, `split_scripts/`, `vis_scripts/`, `draw_heatmap/` |
 
 ## Why Tri-MIL
 
@@ -47,7 +47,7 @@ Tri-MIL keeps them in one place so experiments are easier to reproduce, extend, 
 |---|---|---|
 | 1. Preprocess WSIs | tissue segmentation and patch coordinate generation | contours, thumbnails, coordinates |
 | 2. Extract features | patch embeddings or slide embeddings | feature files |
-| 3. Prepare splits | dataset CSV construction and train/val/test split generation | standardized csv files |
+| 3. Prepare dataset CSVs and splits | dataset CSV construction and train/val/test split generation | standardized csv files |
 | 4. Train MIL | fit a selected MIL model from YAML config | checkpoints, logs, metrics |
 | 5. Evaluate and visualize | test model behavior and interpret outputs | metrics, ROC, heatmaps, attention maps |
 
@@ -122,13 +122,73 @@ pip install -e .
 python run_batch_of_slides.py --task all --wsi_dir ./wsis --job_dir ./tri_outputs --patch_encoder uni_v1 --mag 20 --patch_size 256
 ```
 
-### 3. Train a MIL model
+If your WSIs are stored under label subfolders, add `--search_nested`:
+
+```bash
+python run_batch_of_slides.py --task all --wsi_dir ./wsis --job_dir ./tri_outputs --patch_encoder vit --mag 20 --patch_size 256 --search_nested
+```
+
+### 3. Prepare dataset CSVs
+
+Tri-MIL now uses one script, `prepare_dataset_csv.py`, for both training and inference CSV generation.
+
+Flat folder of extracted features + reference CSV:
+
+```bash
+python prepare_dataset_csv.py \
+  --mode train_flat \
+  --feature_dir ./tri_outputs/20x_256px_0px_overlap/features_vit \
+  --reference_csv ./labels.csv \
+  --slide_col slide_id \
+  --label_col label \
+  --output_csv ./train_base.csv
+```
+
+Raw data folder contains one label subfolder per class, while extracted features are stored flat:
+
+```bash
+python prepare_dataset_csv.py \
+  --mode train_label_dirs \
+  --source_dir ./wsis \
+  --feature_dir ./tri_outputs/20x_256px_0px_overlap/features_vit \
+  --output_csv ./train_base.csv \
+  --source_recursive
+```
+
+Feature directory itself already contains label subfolders:
+
+```bash
+python prepare_dataset_csv.py \
+  --mode train_label_dirs \
+  --feature_dir ./labeled_features \
+  --output_csv ./train_base.csv
+```
+
+Inference from a feature folder without labels:
+
+```bash
+python prepare_dataset_csv.py \
+  --mode infer \
+  --feature_dir ./tri_outputs/20x_256px_0px_overlap/features_vit \
+  --output_csv ./test.csv
+```
+
+For training, convert `train_base.csv` (`slide_path,label`) into fold files:
+
+```bash
+python ./split_scripts/split_datasets_k_fold_train_val.py \
+  --csv_path ./train_base.csv \
+  --dataset_name MY_DATASET \
+  --save_dir ./datasets
+```
+
+### 4. Train a MIL model
 
 ```bash
 python train_mil.py --yaml_path ./configs/AB_MIL.yaml
 ```
 
-### 4. Test a trained model
+### 5. Test a trained model
 
 ```bash
 python test_mil.py --yaml_path ./configs/AB_MIL.yaml --test_dataset_csv /path/to/test.csv --model_weight_path /path/to/model.pth --test_log_dir /path/to/test_logs
@@ -143,6 +203,7 @@ python test_mil.py --yaml_path ./configs/AB_MIL.yaml --test_dataset_csv /path/to
 | `modules/` | MIL model implementations |
 | `process/` | training and testing pipelines |
 | `datasets/` | example dataset CSVs |
+| `prepare_dataset_csv.py` | unified dataset CSV preparation for train / infer |
 | `split_scripts/` | dataset split generation |
 | `vis_scripts/` | visualization utilities |
 | `draw_heatmap/` | heatmap generation |
