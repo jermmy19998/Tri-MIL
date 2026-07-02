@@ -31,7 +31,7 @@ def test(args):
     criterion = get_criterion(yaml_args.Model.criterion)
     if yaml_args.General.MODEL_NAME == 'DTFD_MIL':
         classifier,attention,dimReduction,attCls = get_model_from_yaml(yaml_args)
-        state_dict = torch.load(model_weight_path,weights_only=True)
+        state_dict = torch.load(model_weight_path, map_location=device, weights_only=True)
         classifier.load_state_dict(state_dict['classifier'])
         attention.load_state_dict(state_dict['attention'])
         dimReduction.load_state_dict(state_dict['dimReduction'])
@@ -41,7 +41,9 @@ def test(args):
     else:
         mil_model = get_model_from_yaml(yaml_args)
         mil_model = mil_model.to(device)
-        mil_model.load_state_dict(torch.load(model_weight_path,weights_only=True))
+        mil_model.load_state_dict(
+            torch.load(model_weight_path, map_location=device, weights_only=True)
+        )
 
     
     # CLAM_SB_MIL and CLAM_MB_MIL models have different val loop pipeline (has instance loss)

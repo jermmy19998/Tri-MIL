@@ -54,6 +54,10 @@ def parse_arguments():
                         help='Do you want to run an additional model to remove penmarks?')
     parser.add_argument('--custom_mpp_keys', type=str, nargs='+', default=None,
                     help='Custom keys used to store the resolution as MPP (micron per pixel) in your list of whole-slide image.')
+    parser.add_argument(
+        '--mpp', type=float, default=None,
+        help='Explicit microns-per-pixel override. Useful for PNG/JPG inputs without microscopy metadata.'
+    )
     parser.add_argument('--overlap', type=int, default=0, 
                         help='Absolute overlap for patching in pixels. Defaults to 0. ')
     parser.add_argument('--batch_size', type=int, default=32, 
@@ -84,7 +88,14 @@ def process_slide(args):
 
     # Initialize the WSI
     print(f"Processing slide: {args.slide_path}")
-    with load_wsi(slide_path=args.slide_path, reader_type=getattr(args, "reader_type", None), lazy_init=False, custom_mpp_keys=args.custom_mpp_keys) as slide:
+    with load_wsi(
+        slide_path=args.slide_path,
+        reader_type=getattr(args, "reader_type", None),
+        lazy_init=False,
+        custom_mpp_keys=args.custom_mpp_keys,
+        mpp=args.mpp,
+        default_mpp=None if args.mpp is not None else (10.0 / float(args.mag)),
+    ) as slide:
         seg_device = "cpu" if args.segmenter == "otsu" else f"cuda:{args.gpu}"
         # Step 1: Tissue Segmentation
         print("Running tissue segmentation...")

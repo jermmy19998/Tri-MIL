@@ -82,6 +82,8 @@ def visualize_heatmap(
     output_dir: Optional[str] = "output",
     vis_mag: Optional[int] = None,
     overlay_only: bool = False,
+    blur: bool = False,
+    topk_dir_name: str = "topk_patches",
     filename: str = 'heatmap.png'
 ) -> str:
     """
@@ -111,6 +113,12 @@ def visualize_heatmap(
         overlay_only (bool):
             Whether to save the overlay only. If True, saves the overlay on top of a downscaled version of the WSI.
             Defaults to False.
+        blur (bool):
+            Whether to apply gaussian blur to the heatmap overlay for smoother visualization.
+            Defaults to False.
+        topk_dir_name (str):
+            Directory name used to save top-scoring patches under `output_dir`.
+            Defaults to "topk_patches".
         filename (str):
             File will be saved in `output_dir`/`filename`.
 
@@ -134,6 +142,16 @@ def visualize_heatmap(
     region_size = tuple((np.array(wsi.level_dimensions[0]) * scale).astype(int))
     overlay = create_overlay(scores, coords, patch_size_level0, scale, region_size)
 
+    if blur:
+        nan_mask = np.isnan(overlay)
+        patch_size_scaled = np.ceil(np.array([patch_size_level0, patch_size_level0]) * scale).astype(int)
+        kernel = np.maximum(3, (patch_size_scaled * 2).astype(int))
+        kernel = kernel + (kernel + 1) % 2  # ensure odd kernel sizes
+        overlay_for_blur = np.nan_to_num(overlay, nan=0.0).astype(np.float32)
+        overlay = cv2.GaussianBlur(overlay_for_blur, tuple(kernel.tolist()), 0)
+        overlay = cv2.GaussianBlur(overlay, tuple(kernel.tolist()), 0)
+        overlay[nan_mask] = np.nan
+
     overlay_colored = apply_colormap(overlay, cmap)
     
     if overlay_only:
@@ -152,7 +170,7 @@ def visualize_heatmap(
     blended_img.save(heatmap_path)
 
     if num_top_patches_to_save > 0:
-        topk_dir = os.path.join(output_dir, "topk_patches")
+        topk_dir = os.path.join(output_dir, topk_dir_name)
         os.makedirs(topk_dir, exist_ok=True)
         topk_indices = np.argsort(scores)[-num_top_patches_to_save:]
         for idx, i in enumerate(topk_indices):

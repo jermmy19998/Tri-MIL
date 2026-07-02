@@ -9,66 +9,40 @@
 </p>
 
 <p align="center">
-  一个面向 WSI 预处理、特征提取、MIL 训练、评估与可视化的统一工作流。
+  面向 WSI 预处理、特征提取、MIL 训练、评估与可视化的一体化流程。
 </p>
 
-Tri-MIL 是一个面向计算病理的项目，由两个互补方向融合扩展而来：
+Tri-MIL 将两部分能力整合到同一套工作流中：
 
-- [Trident](https://github.com/mahmoodlab/trident)：提供现代化的 WSI 预处理与病理基础模型特征提取能力
-- [MIL_BASELINE](https://github.com/lingxitong/MIL_BASELINE)：提供统一的多实例学习（MIL）训练与评估框架
+- [Trident](https://github.com/mahmoodlab/trident)：负责 WSI 预处理与病理基础模型特征提取
+- [MIL_BASELINE](https://github.com/lingxitong/MIL_BASELINE)：负责统一的 MIL 训练与评估
 
-Tri-MIL 不是把两个项目简单拼接在一起，而是希望把它们整合为一条完整、实用的弱监督全切片学习流程：从原始切片，到特征，再到 MIL 实验与结果可视化。
+目标不是把两个仓库简单拼接，而是把从原始切片到特征、再到 MIL 实验和推理的流程打通。
 
-## Tri-MIL 一览
+## 一眼看懂
 
 | 模块 | 作用 | 主要路径 |
 |---|---|---|
-| 预处理 | 读取 WSI、组织分割、patch 坐标生成、patch/slide 特征提取 | `trident/`, `run_batch_of_slides.py`, `run_single_slide.py` |
-| 训练 | 基于统一配置接口训练 MIL 模型 | `configs/`, `modules/`, `process/`, `train_mil.py` |
-| 评估 | 测试模型并导出指标与推理结果 | `test_mil.py`, `infer_mil.py` |
-| 工具 | 数据集划分、结果可视化与热图生成 | `split_scripts/`, `vis_scripts/`, `draw_heatmap/` |
-
-## 为什么做 Tri-MIL
-
-很多病理项目都会把这些步骤拆散在多个仓库里：
-
-- WSI 预处理
-- 特征提取
-- 数据集划分
-- MIL 训练
-- 测试与可视化
-
-Tri-MIL 的目标是把这些环节统一在一个仓库里，让实验更容易复现、扩展和维护。
+| 预处理 | 读取 WSI、组织分割、坐标生成、特征提取 | `trident/`, `run_batch_of_slides.py`, `run_single_slide.py` |
+| 训练 | 基于配置文件训练 MIL 模型 | `configs/`, `modules/`, `process/`, `train_mil.py` |
+| 评估 | 测试模型并导出推理结果 | `test_mil.py`, `infer_mil.py` |
+| 工具 | 数据集 CSV 准备、划分与可视化 | `prepare_dataset_csv.py`, `split_scripts/`, `vis_scripts/`, `draw_heatmap/` |
 
 ## 工作流
 
 | 阶段 | 内容 | 输出 |
 |---|---|---|
-| 1. WSI 预处理 | 组织分割与 patch 坐标生成 | contours、thumbnails、coordinates |
-| 2. 特征提取 | 生成 patch 特征或 slide 特征 | feature files |
-| 3. 数据组织 | 构建数据集 CSV 与 train/val/test 划分 | 标准化 csv 文件 |
-| 4. MIL 训练 | 从 YAML 配置训练指定 MIL 方法 | checkpoints、logs、metrics |
-| 5. 评估与可视化 | 测试模型并解释输出行为 | metrics、ROC、heatmaps、attention maps |
+| 1. WSI 预处理 | 组织分割与 patch 坐标生成 | contours, thumbnails, coordinates |
+| 2. 特征提取 | 提取 patch 或 slide 特征 | feature files |
+| 3. 数据准备 | 生成训练/推理 CSV，并按需划分 train/val/test | standardized csv files |
+| 4. MIL 训练 | 按 YAML 配置训练模型 | checkpoints, logs, metrics |
+| 5. 评估与可视化 | 测试模型并分析结果 | metrics, ROC, heatmaps, attention maps |
 
-## 核心能力
-
-| 方向 | 说明 |
-|---|---|
-| WSI 读取 | 支持 OpenSlide、CuCIM、SDPC、普通图像、CZI、OME-Zarr |
-| 组织分割 | 支持 HEST、GrandQC、Otsu |
-| 特征提取 | 支持统一的 patch encoder 和 slide encoder 调用 |
-| MIL 实验 | 多种 MIL 方法共享统一配置接口 |
-| 数据划分 | 支持用户自定义和多种 k-fold 划分 |
-| 可视化 | 支持 feature map、attention map、heatmap 与推理结果分析 |
-
-## 支持的 Encoder
-
-### Patch Encoder
-
-Tri-MIL 当前通过集成预处理栈支持以下 patch encoder：
+## 支持的 Patch Encoder
 
 | Patch Encoder | Embedding Dim | Args | Link |
 |---|---:|---|---|
+| ViT-S/16 | 384 | `--patch_encoder vit --patch_size 256 --mag 20` | [timm/vit_small_patch16_224.augreg_in21k_ft_in1k](https://huggingface.co/timm/vit_small_patch16_224.augreg_in21k_ft_in1k) |
 | UNI | 1024 | `--patch_encoder uni_v1 --patch_size 256 --mag 20` | [MahmoodLab/UNI](https://huggingface.co/MahmoodLab/UNI) |
 | UNI2-h | 1536 | `--patch_encoder uni_v2 --patch_size 256 --mag 20` | [MahmoodLab/UNI2-h](https://huggingface.co/MahmoodLab/UNI2-h) |
 | CONCH | 512 | `--patch_encoder conch_v1 --patch_size 512 --mag 20` | [MahmoodLab/CONCH](https://huggingface.co/MahmoodLab/CONCH) |
@@ -94,16 +68,6 @@ Tri-MIL 当前通过集成预处理栈支持以下 patch encoder：
 | CTransPath-CHIEF | 768 | `--patch_encoder ctranspath --patch_size 256 --mag 10` | - |
 | ResNet50 | 1024 | `--patch_encoder resnet50 --patch_size 256 --mag 20` | - |
 
-### Slide Encoder
-
-当前配置的 slide encoder 包括：
-
-| Slide Encoder | 默认 patch encoder / 依赖 | 说明 |
-|---|---|---|
-| `chief` | `ctranspath` | 需要本地配置 CHIEF 路径 |
-| `madeleine` | `conch_v1` | 需要 MADELEINE 依赖 |
-| `gigapath` | `gigapath` | slide-level embedding workflow |
-
 ## 快速开始
 
 ### 1. 安装
@@ -114,107 +78,198 @@ conda activate tri-mil
 pip install -e .
 ```
 
-### 2. 预处理切片
+### 2. 最简单的推理流程
+
+如果你已经有一个特征文件夹，现在不需要先手工生成 `test.csv`。
 
 ```bash
-python run_batch_of_slides.py --task all --wsi_dir ./wsis --job_dir ./tri_outputs --patch_encoder uni_v1 --mag 20 --patch_size 256
+python tri_mil.py infer \
+  --yaml_path ./configs/TRANS_MIL.yaml \
+  --model_weight_path /path/to/model.pth \
+  --feature_dir ./tri_outputs/20x_256px_0px_overlap/features_vit \
+  --test_log_dir ./infer_out \
+  --no_label
 ```
 
-### 3. 训练 MIL 模型
+现在这条命令会自动帮你：
+
+- 根据 `--feature_dir` 生成内部推理 CSV
+- 从特征文件自动推断 `Model.in_dim`
+- 自动选择更安全的运行设备并做回退
+- 常见推理场景下不再需要手改 YAML
+
+如果你已经有 CSV，旧用法仍然可用：
+
+```bash
+python infer_mil.py \
+  --yaml_path ./configs/TRANS_MIL.yaml \
+  --test_dataset_csv ./test.csv \
+  --model_weight_path /path/to/model.pth \
+  --test_log_dir ./infer_out \
+  --no_label
+```
+
+### 3. 最简单的热图流程
+
+如果你已经有预计算好的特征和坐标，现在不需要每次都去改 `draw_heatmap/heatmap.yaml`。
+
+```bash
+python tri_mil.py heatmap \
+  --wsi_dir ./wsis \
+  --feature_dir ./tri_outputs/20x_256px_0px_overlap/features_vit \
+  --coord_dir ./tri_outputs/20x_256px_0px_overlap/patches \
+  --model_yaml ./configs/TRANS_MIL.yaml \
+  --model_ckpt /path/to/model.pth \
+  --job_dir ./heatmap_out \
+  --mpp 0.5 \
+  --reader_type image \
+  --blur
+```
+
+这对 `.png/.jpg` 输入，以及“特征和 patch 坐标已经准备好”的情况尤其方便。
+如果原图放在多级子目录下，现在热图输出会自动带上原图的相对文件夹前缀，避免不同子目录里的同名切片互相覆盖。
+
+### 4. 预处理与特征提取
+
+普通目录：
+
+```bash
+python run_batch_of_slides.py --task all --wsi_dir ./wsis --job_dir ./tri_outputs --patch_encoder vit --mag 20 --patch_size 256
+```
+
+如果 `./wsis` 下还有标签子目录或更深层目录，加上 `--search_nested`：
+
+```bash
+python run_batch_of_slides.py --task all --wsi_dir ./wsis --job_dir ./tri_outputs --patch_encoder vit --mag 20 --patch_size 256 --search_nested
+```
+
+### 5. 最简单的训练流程
+
+现在训练也可以直接从“特征目录 + 一种标签来源”开始，不需要你手工生成 `train_base.csv`、fold CSV，也不需要手改 YAML 里的数据路径。
+
+特征目录 + reference CSV：
+
+```bash
+python tri_mil.py train \
+  --yaml_path ./configs/TRANS_MIL.yaml \
+  --feature_dir ./tri_outputs/20x_256px_0px_overlap/features_vit \
+  --reference_csv ./labels.csv \
+  --slide_col slide_id \
+  --label_col label \
+  --dataset_name MY_DATASET \
+  --output_dir ./train_workspace \
+  --k 3
+```
+
+特征目录 + 原始数据标签子文件夹：
+
+```bash
+python tri_mil.py train \
+  --yaml_path ./configs/TRANS_MIL.yaml \
+  --feature_dir ./tri_outputs/20x_256px_0px_overlap/features_vit \
+  --source_dir ./wsis \
+  --dataset_name MY_DATASET \
+  --output_dir ./train_workspace \
+  --source_recursive \
+  --k 3
+```
+
+现在会自动完成：
+
+- 生成内部训练 CSV
+- 生成 k-fold CSV
+- 自动推断 `Model.in_dim`
+- 自动推断 `General.num_classes`
+- 写出 `label_map.json`
+- 自动补齐运行时 YAML，避免手工改数据路径
+
+### 6. 如有需要再手工生成数据集 CSV
+
+现在统一使用 `prepare_dataset_csv.py`，不再区分旧的 `gen_train_csv.py` 和 `gen_test_csv.py`。
+
+情况一：同一级目录里都是特征文件，另外有一个 `reference csv`
+
+```bash
+python prepare_dataset_csv.py \
+  --mode train_flat \
+  --feature_dir ./tri_outputs/20x_256px_0px_overlap/features_vit \
+  --reference_csv ./labels.csv \
+  --slide_col slide_id \
+  --label_col label \
+  --output_csv ./train_base.csv
+```
+
+情况二：原始数据目录下是标签子文件夹，特征目录是打平保存的
+
+```bash
+python prepare_dataset_csv.py \
+  --mode train_label_dirs \
+  --source_dir ./wsis \
+  --feature_dir ./tri_outputs/20x_256px_0px_overlap/features_vit \
+  --output_csv ./train_base.csv \
+  --source_recursive
+```
+
+情况三：特征目录本身已经按标签子文件夹整理好了
+
+```bash
+python prepare_dataset_csv.py \
+  --mode train_label_dirs \
+  --feature_dir ./labeled_features \
+  --output_csv ./train_base.csv
+```
+
+情况四：只有一个待推理的特征文件夹，没有标签
+
+```bash
+python prepare_dataset_csv.py \
+  --mode infer \
+  --feature_dir ./tri_outputs/20x_256px_0px_overlap/features_vit \
+  --output_csv ./test.csv
+```
+
+### 7. 训练前做 fold 划分
+
+训练脚本仍然需要 fold CSV，所以把 `train_base.csv` 再转一次：
+
+```bash
+python ./split_scripts/split_datasets_k_fold_train_val.py \
+  --csv_path ./train_base.csv \
+  --dataset_name MY_DATASET \
+  --save_dir ./datasets
+```
+
+### 8. 手工训练 MIL 模型
 
 ```bash
 python train_mil.py --yaml_path ./configs/AB_MIL.yaml
 ```
 
-### 4. 测试训练好的模型
+### 9. 推理或测试
+
+有标签测试：
 
 ```bash
 python test_mil.py --yaml_path ./configs/AB_MIL.yaml --test_dataset_csv /path/to/test.csv --model_weight_path /path/to/model.pth --test_log_dir /path/to/test_logs
+```
+
+无标签推理：
+
+```bash
+python infer_mil.py --yaml_path ./configs/AB_MIL.yaml --test_dataset_csv ./test.csv --model_weight_path /path/to/model.pth --test_log_dir ./infer_out --no_label
 ```
 
 ## 仓库结构
 
 | 路径 | 作用 |
 |---|---|
-| `trident/` | 内嵌的预处理与特征提取后端 |
+| `trident/` | 集成的预处理与特征提取后端 |
 | `configs/` | MIL 实验配置 |
 | `modules/` | MIL 模型实现 |
-| `process/` | 训练与测试流程 |
+| `process/` | 训练和测试流程 |
 | `datasets/` | 示例数据集 CSV |
+| `prepare_dataset_csv.py` | 训练 / 推理 CSV 统一生成入口 |
 | `split_scripts/` | 数据集划分脚本 |
 | `vis_scripts/` | 可视化工具 |
 | `draw_heatmap/` | 热图生成 |
-| `feature_extractor/` | 兼容旧流程的特征提取工具 |
-
-## 支持的 MIL 模型
-
-Tri-MIL 当前包含以下 MIL 模型配置与实现：
-
-| Model | Paper / Method | Venue / Year |
-|---|---|---|
-| `MEAN_MIL` | Mean pooling MIL baseline | baseline |
-| `MAX_MIL` | Max pooling MIL baseline | baseline |
-| `AB_MIL` | [Attention-based Deep Multiple Instance Learning](https://arxiv.org/abs/1802.04712) | ICML 2018 |
-| `MIXUP_MIL` | [mixup: Beyond Empirical Risk Minimization](https://arxiv.org/abs/1710.09412) | ICLR 2018 |
-| `DT_MIL` | [Deformable Transformer for Multi-instance Learning on Histopathological Image](https://link.springer.com/chapter/10.1007/978-3-030-87237-3_20) | MICCAI 2021 |
-| `TRANS_MIL` | [Transformer based Correlated Multiple Instance Learning for WSI Classification](https://arxiv.org/abs/2106.00908) | NeurIPS 2021 |
-| `DS_MIL` | [Dual-stream MIL Network for WSI Classification with SSL Contrastive Learning](https://arxiv.org/abs/2011.08939) | CVPR 2021 |
-| `CLAM_SB_MIL`, `CLAM_MB_MIL` | [Data Efficient and Weakly Supervised Computational Pathology on WSI](https://arxiv.org/abs/2004.09666) | Nat Biomed Eng 2021 |
-| `PGCN_MIL` | [Context-Aware Survival Prediction using Patch-based Graph Convolutional Networks](https://github.com/mahmoodlab/Patch-GCN) | MICCAI 2021 |
-| `REMIX_MIL` | [A General and Efficient Framework for MIL based WSI Classification](https://arxiv.org/abs/2110.09632) | MICCAI 2022 |
-| `S4_MIL` | [Efficiently Modeling Long Sequences with Structured State Spaces](https://github.com/isyangshu/MambaMIL) | ICLR 2022 |
-| `DG_MIL` | [Distribution Guided Multiple Instance Learning for Whole Slide Image Classification](https://arxiv.org/abs/2206.08861) | MICCAI 2022 |
-| `DTFD_MIL` | [Double-Tier Feature Distillation MIL for Histopathology WSI Classification](https://arxiv.org/abs/2203.12081) | CVPR 2022 |
-| `ADD_MIL` | [Additive MIL: Intrinsically Interpretable MIL for Pathology](https://arxiv.org/pdf/2206.01794) | NeurIPS 2022 |
-| `ILRA_MIL` | [Exploring Low-rank Property in MIL for Whole Slide Image classification](https://openreview.net/pdf?id=01KmhBsEPFO) | ICLR 2023 |
-| `IIB_MIL` | [Integrated instance-level and bag-level MIL with label disambiguation](https://link.springer.com/chapter/10.1007/978-3-031-43987-2_54) | MICCAI 2023 |
-| `IB_MIL` | [Interventional Bag Multi-Instance Learning On Whole-Slide Pathological Images](https://github.com/HHHedo/IBMIL) | CVPR 2023 |
-| `RANKMIX_MIL` | [Data Augmentation for Classifying WSIs with Diverse Sizes](https://openaccess.thecvf.com/content/CVPR2023/html/Chen_RankMix_Data_Augmentation_for_Weakly_Supervised_Learning_of_Classifying_Whole_CVPR_2023_paper.html) | CVPR 2023 |
-| `MHIM_MIL` | [MIL Framework with Masked Hard Instance Mining for WSI Classification](https://arxiv.org/abs/2307.15254) | ICCV 2023 |
-| `WIKG_MIL` | [Dynamic Graph Representation with Knowledge-aware Attention for WSI Analysis](https://arxiv.org/abs/2403.07719) | CVPR 2024 |
-| `AMD_MIL` | [Agent Aggregator with Mask Denoise Mechanism for Histopathology WSI Analysis](https://dl.acm.org/doi/10.1145/3664647.3681425) | MM 2024 |
-| `FR_MIL` | [Distribution Re-calibration based MIL with Transformer for WSI Classification](https://ieeexplore.ieee.org/abstract/document/10640165) | TMI 2024 |
-| `PSEBMIX_MIL` | [Pseudo-Bag Mixup Augmentation for MIL Based Whole Slide Image Classification](https://ieeexplore.ieee.org/abstract/document/10385148) | TMI 2024 |
-| `LONG_MIL` | [Scaling Long Contextual MIL for Histopathology WSI Analysis](https://arxiv.org/abs/2311.12885) | NeurIPS 2024 |
-| `DGR_MIL` | [Exploring Diverse Global Representation in MIL for WSI Classification](https://arxiv.org/abs/2407.03575) | ECCV 2024 |
-| `CDP_MIL` | [cDP-MIL: Robust Multiple Instance Learning via Cascaded Dirichlet Process](https://arxiv.org/abs/2407.11448) | ECCV 2024 |
-| `CA_MIL` | [Context-Aware Multiple Instance Learning for WSI Classification](https://arxiv.org/pdf/2305.05314) | ICLR 2024 |
-| `AC_MIL` | [Attention-Challenging Multiple Instance Learning for WSI Classification](https://arxiv.org/pdf/2311.07125) | ECCV 2024 |
-| `MAMBA_MIL` | [Enhancing Long Sequence Modeling with Sequence Reordering in CPath](https://arxiv.org/abs/2403.06800) | MICCAI 2024 |
-| `RET_MIL` | [Retentive Multiple Instance Learning for Histopathological WSI Classification](https://link.springer.com/chapter/10.1007/978-3-031-72083-3_41) | MICCAI 2024 |
-| `SC_MIL` | [Sparse Context-aware MIL for Predicting Cancer Survival Probability Distribution in WSI](https://arxiv.org/abs/2407.00664) | MICCAI 2024 |
-| `NCIE_MIL` | [Rethinking Decoupled MIL Framework for Histopathological Slide Classification](https://openreview.net/pdf?id=1GxyidfQzc) | MIDL 2024 |
-| `RRT_MIL` | [Towards Foundation Model-Level Performance in Computational Pathology](https://github.com/DearCaat/RRT-MIL) | CVPR 2024 |
-| `PA_MIL` | [Dynamic Policy-Driven Adaptive Multi-Instance Learning for WSI Classification](https://ieeexplore.ieee.org/document/10656273) | CVPR 2024 |
-| `MICRO_MIL` | [Graph-Based MIL for Context-Aware Diagnosis with Microscopic Images](https://arxiv.org/abs/2407.21604) | MICCAI 2025 |
-| `DYHG_MIL` | [Dynamic Hypergraph Representation for Bone Metastasis Cancer Analysis](https://arxiv.org/abs/2501.16787) | CMPB 2025 |
-| `MSM_MIL` | [Multi-scan Mamba-based Multiple Instance Learning for WSI classification](https://www.sciencedirect.com/science/article/abs/pii/S0950705125009177) | KBS 2025 |
-| `MAMBA2D_MIL` | [2DMamba: Efficient State Space Model for Image Representation](https://github.com/AtlasAnalyticsLab/2DMamba) | CVPR 2025 |
-| `FOURIER_MIL` | [Fourier filtering-based multiple instance learning for whole slide image analysis](https://doi.org/10.1007/s11263-025-02679-x) | IJCV 2025 |
-| `AEM_MIL` | [Attention Entropy Maximization for MIL based WSI Classification](https://arxiv.org/abs/2406.15303) | MICCAI 2025 |
-| `MICO_MIL` | [Multiple Instance Learning with Context-Aware Clustering](https://arxiv.org/abs/2506.18028) | MICCAI 2025 |
-| `TDA_MIL` | [Top-Down Attention-based Multiple Instance Learning for Whole Slide Image Analysis](https://link.springer.com/chapter/10.1007/978-3-032-04927-8_62) | MICCAI 2025 |
-| `PSA_MIL` | [Probabilistic Spatial Attention-Based MIL for Whole Slide Image Classification](https://arxiv.org/abs/2503.16284) | WACV 2026 |
-| `STABLE_MIL` | [Entropy-Stabilized Attention-based MIL for Morphologically Variable WSIs](https://ieeexplore.ieee.org/abstract/document/11477827) | TMI 2026 |
-| `GDF_MIL` | [Rethinking Multi-Instance Learning through Graph-Driven Fusion](https://ojs.aaai.org/index.php/AAAI/article/view/40081) | AAAI 2026 |
-| `DAG_MIL` | [Deformable attention graph representation learning for histopathology WSI analysis](https://ieeexplore.ieee.org/abstract/document/11464653) | ICASSP 2026 |
-| `MO_MIL` | [MoMIL: Multi-order Enhanced Multiple Instance Learning for Computational Pathology](https://www.sciencedirect.com/science/article/abs/pii/S0262885626000247) | IJCV 2026 |
-
-## 推荐使用方式
-
-| 场景 | 推荐路径 |
-|---|---|
-| 新的 WSI 预处理流程 | 使用集成预处理工作流 |
-| 新的病理基础模型特征提取 | 使用内嵌 Trident 风格特征栈 |
-| MIL 基准测试或方法扩展 | 使用 YAML 配置配合 `train_mil.py` 与 `test_mil.py` |
-| 结果分析与解释 | 使用 `infer_mil.py`、`vis_scripts/` 和 `draw_heatmap/` |
-
-## 说明
-
-- `feature_extractor/` 主要用于兼容旧流程。
-- 后续推荐优先使用集成式预处理与特征提取工作流。
-- 某些 encoder 仍然需要额外依赖或 gated model 访问权限。
-
-## 致谢
-
-Tri-MIL 受益于计算病理生态中关于 WSI 预处理、MIL benchmarking、弱监督学习与病理基础模型的大量工作。
+| `feature_extractor/` | 兼容旧流程的遗留工具 |

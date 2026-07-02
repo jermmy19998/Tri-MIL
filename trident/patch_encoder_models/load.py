@@ -21,8 +21,102 @@ RESIZE_SUPPORTED_PATCH_ENCODERS = frozenset({
     "uni_v1", "uni_v2", "virchow", "virchow2",
     "kaiko-vitb8", "kaiko-vitb16", "kaiko-vits8", "kaiko-vits16", "kaiko-vitl14",
     # Category B: dynamic_img_size enabled as part of this feature.
-    "gigapath", "hoptimus0", "hoptimus1", "gpfm", "lunit-vits8", "h0-mini",
+    "gigapath", "hoptimus0", "hoptimus1", "gpfm", "lunit-vits8", "h0-mini", "vit",
 })
+
+
+def _strip_state_dict_prefixes(state_dict: Dict[str, Any], prefixes: tuple[str, ...]) -> Dict[str, Any]:
+    normalized = {}
+    for key, value in state_dict.items():
+        new_key = key
+        changed = True
+        while changed:
+            changed = False
+            for prefix in prefixes:
+                if new_key.startswith(prefix):
+                    new_key = new_key[len(prefix):]
+                    changed = True
+        normalized[new_key] = value
+    return normalized
+
+
+def _extract_checkpoint_state_dict(checkpoint: Any) -> Dict[str, Any]:
+    if not isinstance(checkpoint, dict):
+        raise ValueError(f"Expected checkpoint to be a dict, got {type(checkpoint)}")
+
+    candidate_keys = (
+        "state_dict",
+        "model",
+        "student",
+        "teacher",
+        "network",
+        "module",
+    )
+    for key in candidate_keys:
+        value = checkpoint.get(key)
+        if isinstance(value, dict):
+            checkpoint = value
+            break
+
+    if not isinstance(checkpoint, dict):
+        raise ValueError("Could not extract a valid state_dict from checkpoint")
+
+    checkpoint = _strip_state_dict_prefixes(
+        checkpoint,
+        prefixes=(
+            "module.",
+            "model.",
+            "student.",
+            "teacher.",
+            "backbone.",
+            "encoder.",
+            "base_encoder.",
+            "momentum_encoder.",
+            "online_encoder.",
+            "target_encoder.",
+            "trunk.",
+        ),
+    )
+
+    # Drop heads/projectors so plain timm ViT backbones can still load feature weights.
+    filtered = {}
+    skip_prefixes = (
+        "head.",
+        "fc.",
+        "classifier.",
+        "proj.",
+        "predictor.",
+        "projection_head.",
+        "mlp_head.",
+    )
+    for key, value in checkpoint.items():
+        if any(key.startswith(prefix) for prefix in skip_prefixes):
+            continue
+        filtered[key] = value
+
+    return filtered
+
+
+def _load_local_checkpoint(weights_path: str) -> Dict[str, Any]:
+    load_errors = []
+    for weights_only in (False, True):
+        try:
+            checkpoint = torch.load(weights_path, map_location="cpu", weights_only=weights_only)
+            return _extract_checkpoint_state_dict(checkpoint)
+        except TypeError as exc:
+            load_errors.append(exc)
+            try:
+                checkpoint = torch.load(weights_path, map_location="cpu")
+                return _extract_checkpoint_state_dict(checkpoint)
+            except Exception as inner_exc:
+                load_errors.append(inner_exc)
+        except Exception as exc:
+            load_errors.append(exc)
+
+    raise RuntimeError(
+        "Failed to load checkpoint. Errors: "
+        + " | ".join(str(err) for err in load_errors[:3])
+    )
 
 
 def _resolve_target_img_size(enc_name: str, target_img_size: Optional[int], default_img_size: int, patch_size: int) -> int:
@@ -67,6 +161,7 @@ def encoder_factory(model_name: str, **kwargs) -> torch.nn.Module:
             Name of the encoder to instantiate. Must be one of the following:
         - "conch_v1"
         - "conch_v15"
+        - "vit"
         - "uni_v1"
         - "uni_v2"
         - "ctranspath"
@@ -771,6 +866,78 @@ class LunitS8InferenceEncoder(BasePatchEncoder):
                 traceback.print_exc()
                 raise Exception("Failed to download Lunit S8 model, make sure that you were granted access and that you correctly registered your token.")
 
+        data_config = resolve_model_data_config(model)
+        if target_img_size is not None:
+            data_config["input_size"] = (3, img_size, img_size)
+            data_config["crop_pct"] = 1.0
+        eval_transform = create_transform(**data_config, is_training=False)
+        precision = torch.float32
+
+        return model, eval_transform, precision
+
+
+class ViTSmallInferenceEncoder(BasePatchEncoder):
+
+    def __init__(self, **build_kwargs):
+        """
+        ViT-S/16 ImageNet initialization.
+        """
+        super().__init__(**build_kwargs)
+
+    def _build(self, target_img_size=None):
+        import timm
+        from timm.data import resolve_model_data_config
+        from timm.data.transforms_factory import create_transform
+
+        self.enc_name = 'vit'
+        weights_path = self._get_weights_path()
+        img_size = _resolve_target_img_size(self.enc_name, target_img_size, 224, 16)
+        timm_kwargs = {
+            "img_size": img_size,
+            "dynamic_img_size": True,
+        }
+
+        if weights_path:
+            try:
+                model = timm.create_model(
+                    "vit_small_patch16_224.augreg_in21k_ft_in1k",
+                    pretrained=False,
+                    **timm_kwargs,
+                )
+                state_dict = _load_local_checkpoint(weights_path)
+                missing, unexpected = model.load_state_dict(state_dict, strict=False)
+                allowed_missing_prefixes = ("head.", "fc.", "classifier.")
+                real_missing = [
+                    key for key in missing
+                    if not any(key.startswith(prefix) for prefix in allowed_missing_prefixes)
+                ]
+                if real_missing:
+                    raise RuntimeError(
+                        "Checkpoint is incompatible with vit_small_patch16_224. "
+                        f"Missing keys example: {real_missing[:10]}"
+                    )
+                if unexpected:
+                    print(f"[ViT] Ignored unexpected checkpoint keys: {unexpected[:10]}")
+            except:
+                traceback.print_exc()
+                raise Exception(
+                    f"Failed to create ViT-Small model from local checkpoint at '{weights_path}'. "
+                    "You can download the required `pytorch_model.bin` from: "
+                    "https://huggingface.co/timm/vit_small_patch16_224.augreg_in21k_ft_in1k."
+                )
+        else:
+            self.ensure_has_internet(self.enc_name)
+            try:
+                model = timm.create_model(
+                    "vit_small_patch16_224.augreg_in21k_ft_in1k",
+                    pretrained=True,
+                    **timm_kwargs,
+                )
+            except:
+                traceback.print_exc()
+                raise Exception("Failed to download ViT-Small model from timm.")
+
+        model.head = torch.nn.Identity()
         data_config = resolve_model_data_config(model)
         if target_img_size is not None:
             data_config["input_size"] = (3, img_size, img_size)
@@ -1825,6 +1992,7 @@ class Gemma426BInferenceEncoder(Gemma4InferenceEncoder):
 encoder_registry = {
     "conch_v1": Conchv1InferenceEncoder,
     "conch_v15": Conchv15InferenceEncoder,
+    "vit": ViTSmallInferenceEncoder,
     "uni_v1": UNIInferenceEncoder,
     "uni_v2": UNIv2InferenceEncoder,
     "ctranspath": CTransPathInferenceEncoder,

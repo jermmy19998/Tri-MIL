@@ -106,6 +106,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help='List of allowed file extensions for WSI files.')
     parser.add_argument('--custom_mpp_keys', type=str, nargs='+', default=None,
                     help='Custom keys used to store the resolution as MPP (micron per pixel) in your list of whole-slide image.')
+    parser.add_argument(
+        '--mpp', type=float, default=None,
+        help='Explicit microns-per-pixel override. If omitted for image files without metadata, defaults to 10 / --mag.'
+    )
     parser.add_argument('--custom_list_of_wsis', type=str, default=None,
                     help='Custom list of WSIs specified in a csv file.')
     parser.add_argument('--reader_type', type=str, choices=['openslide', 'image', 'cucim', 'sdpc', 'omezarr', 'czi'], default=None,
@@ -247,6 +251,8 @@ def initialize_processor(args: argparse.Namespace) -> Processor:
         reader_type=args.reader_type,
         search_nested=args.search_nested,
         selected_wsi_paths=getattr(args, 'selected_wsi_paths', None),
+        mpp=args.mpp,
+        default_mpp=None if args.mpp is not None else (10.0 / float(args.mag)),
     )
 
 
