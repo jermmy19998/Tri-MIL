@@ -11,6 +11,43 @@ from sklearn.model_selection import StratifiedKFold
 
 
 SUPPORTED_FEATURE_SUFFIXES = (".h5", ".pt")
+PIPELINE_SECTION_NAMES = ("Common", "Train", "Test", "Infer", "Heatmap")
+
+
+def read_plain_yaml(path: str) -> dict:
+    with open(path, "r", encoding="utf-8") as handle:
+        data = yaml.safe_load(handle)
+    return data or {}
+
+
+def is_pipeline_yaml(config: dict) -> bool:
+    if not isinstance(config, dict):
+        return False
+    if "General" in config and "Model" in config:
+        return False
+    return any(section in config for section in PIPELINE_SECTION_NAMES)
+
+
+def get_pipeline_section(config: dict, section_name: str) -> dict:
+    section = config.get(section_name, {})
+    return section if isinstance(section, dict) else {}
+
+
+def resolve_model_yaml_path(yaml_path: str, pipeline_config: dict | None = None) -> str:
+    pipeline_config = pipeline_config or {}
+    common_cfg = get_pipeline_section(pipeline_config, "Common")
+    model_yaml_path = common_cfg.get("model_yaml_path") or common_cfg.get("yaml_path")
+    return str(Path(model_yaml_path).expanduser().resolve()) if model_yaml_path else str(Path(yaml_path).expanduser().resolve())
+
+
+def merge_nested_dict(base: dict, overrides: dict) -> dict:
+    merged = copy.deepcopy(base)
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = merge_nested_dict(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
 
 
 def collect_feature_files(feature_dir: str, recursive: bool = False) -> list[str]:

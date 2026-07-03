@@ -8,15 +8,29 @@ import torch
 import shutil
 import os
 from utils.model_utils import get_model_from_yaml,get_criterion
+from utils.runtime_utils import (
+    get_pipeline_section,
+    is_pipeline_yaml,
+    load_torch_checkpoint,
+    read_plain_yaml,
+    resolve_model_yaml_path,
+    select_runtime_device,
+)
 warnings.filterwarnings('ignore')
 
 def test(args):
-    yaml_path = args.yaml_path
-    print(f"MIL-model-yaml path: {yaml_path}")
-    yaml_args = read_yaml(yaml_path)
+    plain_cfg = read_plain_yaml(args.yaml_path)
+    model_yaml_path = resolve_model_yaml_path(args.yaml_path, plain_cfg if is_pipeline_yaml(plain_cfg) else None)
+    test_cfg = get_pipeline_section(plain_cfg, "Test") if is_pipeline_yaml(plain_cfg) else {}
+    common_cfg = get_pipeline_section(plain_cfg, "Common") if is_pipeline_yaml(plain_cfg) else {}
+
+    print(f"MIL-model-yaml path: {model_yaml_path}")
+    yaml_args = read_yaml(model_yaml_path)
     model_name = yaml_args.General.MODEL_NAME
     num_classes = yaml_args.General.num_classes
-    test_dataset_csv = args.test_dataset_csv
+    test_dataset_csv = args.test_dataset_csv or test_cfg.get("test_dataset_csv") or common_cfg.get("test_dataset_csv")
+    if not test_dataset_csv:
+        raise ValueError("test_dataset_csv is required for test_mil.")
     print(f"Dataset csv path: {test_dataset_csv}")
     # CDP_MIL and LONG_MIL models have different dataset pipeline
     if model_name == 'CDP_MIL':
@@ -25,13 +39,19 @@ def test(args):
         LONG_MIL_WSI_Dataset(test_dataset_csv,yaml_args.Dataset.h5_csv_path,'test')
     test_ds = WSI_Dataset(test_dataset_csv,'test')
     test_dataloader = DataLoader(test_ds,batch_size=1,shuffle=False)
-    model_weight_path = args.model_weight_path
+    model_weight_path = args.model_weight_path or test_cfg.get("model_weight_path") or common_cfg.get("model_weight_path")
+    if not model_weight_path:
+        raise ValueError("model_weight_path is required for test_mil.")
     print(f"Model weight path: {model_weight_path}")
-    device = torch.device(f'cuda:{yaml_args.General.device}')
+    runtime_device, device_message = select_runtime_device(
+        args.device if args.device is not None else test_cfg.get("device", common_cfg.get("device", yaml_args.General.device))
+    )
+    print(f"[INFO] {device_message}")
+    device = runtime_device
     criterion = get_criterion(yaml_args.Model.criterion)
     if yaml_args.General.MODEL_NAME == 'DTFD_MIL':
         classifier,attention,dimReduction,attCls = get_model_from_yaml(yaml_args)
-        state_dict = torch.load(model_weight_path, map_location=device, weights_only=True)
+        state_dict = load_torch_checkpoint(model_weight_path, map_location=device)
         classifier.load_state_dict(state_dict['classifier'])
         attention.load_state_dict(state_dict['attention'])
         dimReduction.load_state_dict(state_dict['dimReduction'])
@@ -41,9 +61,7 @@ def test(args):
     else:
         mil_model = get_model_from_yaml(yaml_args)
         mil_model = mil_model.to(device)
-        mil_model.load_state_dict(
-            torch.load(model_weight_path, map_location=device, weights_only=True)
-        )
+        mil_model.load_state_dict(load_torch_checkpoint(model_weight_path, map_location=device))
 
     
     # CLAM_SB_MIL and CLAM_MB_MIL models have different val loop pipeline (has instance loss)
@@ -66,10 +84,12 @@ def test(args):
     print(f'{FAIL}Test_Loss:{ENDC}{test_loss}\n')
     print(f'{FAIL}Test_Metrics:  {ENDC}{test_metrics}\n')
     
-    test_log_dir = args.test_log_dir
+    test_log_dir = args.test_log_dir or test_cfg.get("test_log_dir") or common_cfg.get("test_log_dir")
+    if not test_log_dir:
+        raise ValueError("test_log_dir is required for test_mil.")
     os.makedirs(test_log_dir,exist_ok=True)
     new_yaml_path = os.path.join(test_log_dir,f'Test_{model_name}.yaml')
-    shutil.copyfile(yaml_path,new_yaml_path)
+    shutil.copyfile(model_yaml_path,new_yaml_path)
     new_test_dataset_csv_path = os.path.join(test_log_dir,f'Test_dataset_{yaml_args.Dataset.DATASET_NAME}.csv')
     shutil.copyfile(test_dataset_csv,new_test_dataset_csv_path)
     test_log_path = os.path.join(test_log_dir,f'Test_Log_{model_name}.txt')
@@ -82,10 +102,11 @@ def test(args):
     
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--yaml_path',type=str,default='/path/to/your/config-yaml',help='path to MIL-model-yaml file')
+    parser.add_argument('--yaml_path',type=str,default='/path/to/your/config-yaml',help='path to model yaml or pipeline yaml')
     parser.add_argument('--test_dataset_csv',type=str,default='/path/to/your/ds-csv-path',help='path to dataset csv')
     parser.add_argument('--model_weight_path',type=str,default='/path/to/your/model-weight',help='path to model weights ')
     parser.add_argument('--test_log_dir',type=str,default='/path/to/your/test-log-dir',help='path to test log dir')
+    parser.add_argument('--device',type=str,default=None,help='runtime device override')
     args = parser.parse_args()
     test(args)
 

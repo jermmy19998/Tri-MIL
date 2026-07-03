@@ -1,0 +1,60 @@
+Common:
+  model_yaml_path: ./configs/TRANS_MIL.yaml
+  model_weight_path: ""
+  feature_dir: ""
+  feature_recursive: false
+  device: auto
+
+Train:
+  dataset_name: MY_DATASET
+  output_dir: ./train_workspace
+  reference_csv: ""
+  source_dir: ""
+  slide_col: slide_id
+  label_col: label
+  source_recursive: false
+  k: 3
+  seed: 42
+  epochs: null
+  num_classes: null
+  log_dir: ""
+
+Test:
+  test_dataset_csv: ""
+  test_log_dir: ./test_out
+  device: auto
+
+Infer:
+  feature_dir: ""
+  feature_recursive: false
+  test_dataset_csv: ""
+  test_log_dir: ./infer_out
+  model_weight_path: ""
+  device: auto
+  num_classes: null
+
+Heatmap:
+  job_dir: ./heatmap_viz
+  device: auto
+  wsi:
+    wsi_dir: ""
+    extensions: [".svs", ".tif", ".tiff", ".png", ".jpg", ".jpeg"]
+    reader_type: null
+    mpp: null
+    custom_mpp_keys: []
+  precomputed:
+    feature_path: ""
+    coord_path: ""
+  segmentation:
+    model_name: hest
+  patch_coords:
+    target_mag: 20
+    patch_size: 256
+    overlap: 128
+  patch_encoder:
+    model_name: resnet50
+  visualization:
+    vis_level: 0
+    normalize: true
+    blur: true
+    num_top_patches_to_save: 10

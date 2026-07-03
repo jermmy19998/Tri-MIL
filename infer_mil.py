@@ -24,9 +24,13 @@ from utils.loop_utils import test_loop
 from utils.runtime_utils import (
     clone_config_with_overrides,
     create_infer_csv_from_feature_dir,
+    get_pipeline_section,
     infer_feature_dim,
+    is_pipeline_yaml,
     load_torch_checkpoint,
+    read_plain_yaml,
     resolve_first_feature_path,
+    resolve_model_yaml_path,
     select_runtime_device,
 )
 from utils.wsi_utils import (
@@ -121,35 +125,44 @@ def to_json_serializable(obj):
 # Main
 # =====================================================
 def test(args):
+    plain_cfg = read_plain_yaml(args.yaml_path)
+    model_yaml_path = resolve_model_yaml_path(args.yaml_path, plain_cfg if is_pipeline_yaml(plain_cfg) else None)
+    infer_cfg = get_pipeline_section(plain_cfg, "Infer") if is_pipeline_yaml(plain_cfg) else {}
+    common_cfg = get_pipeline_section(plain_cfg, "Common") if is_pipeline_yaml(plain_cfg) else {}
 
-    yaml_args = read_yaml(args.yaml_path)
+    yaml_args = read_yaml(model_yaml_path)
     model_name = yaml_args.General.MODEL_NAME
     num_classes = yaml_args.General.num_classes
 
-    dataset_csv_path = args.test_dataset_csv
+    dataset_csv_path = args.test_dataset_csv or infer_cfg.get("test_dataset_csv") or common_cfg.get("test_dataset_csv")
     temp_dir = None
     temp_yaml_path = None
 
     if not dataset_csv_path:
-        if not args.feature_dir:
+        feature_dir = args.feature_dir or infer_cfg.get("feature_dir") or common_cfg.get("feature_dir")
+        feature_recursive = args.feature_recursive or bool(infer_cfg.get("feature_recursive")) or bool(common_cfg.get("feature_recursive"))
+        if not feature_dir:
             raise ValueError("Provide either --test_dataset_csv or --feature_dir for inference.")
         temp_dir = tempfile.mkdtemp(prefix="tri_mil_infer_")
         dataset_csv_path = create_infer_csv_from_feature_dir(
-            feature_dir=args.feature_dir,
+            feature_dir=feature_dir,
             output_csv=os.path.join(temp_dir, "test.csv"),
-            recursive=args.feature_recursive,
+            recursive=feature_recursive,
         )
         print(f"[INFO] Generated internal inference CSV: {dataset_csv_path}")
+    else:
+        feature_dir = args.feature_dir or infer_cfg.get("feature_dir") or common_cfg.get("feature_dir")
+        feature_recursive = args.feature_recursive or bool(infer_cfg.get("feature_recursive")) or bool(common_cfg.get("feature_recursive"))
 
     first_feature_path = resolve_first_feature_path(
         csv_path=dataset_csv_path,
-        feature_dir=args.feature_dir,
-        recursive=args.feature_recursive,
+        feature_dir=feature_dir,
+        recursive=feature_recursive,
     )
     inferred_in_dim = infer_feature_dim(first_feature_path)
 
     runtime_device, device_message = select_runtime_device(
-        args.device if args.device is not None else getattr(yaml_args.General, "device", "auto")
+        args.device if args.device is not None else infer_cfg.get("device", common_cfg.get("device", getattr(yaml_args.General, "device", "auto")))
     )
     print(f"[INFO] {device_message}")
 
@@ -166,14 +179,15 @@ def test(args):
         yaml_device_value = runtime_device.index if runtime_device.index is not None else 0
     config_overrides["General.device"] = yaml_device_value
 
-    if args.num_classes is not None:
-        config_overrides["General.num_classes"] = args.num_classes
+    runtime_num_classes = args.num_classes if args.num_classes is not None else infer_cfg.get("num_classes")
+    if runtime_num_classes is not None:
+        config_overrides["General.num_classes"] = runtime_num_classes
 
     if config_overrides:
         if temp_dir is None:
             temp_dir = tempfile.mkdtemp(prefix="tri_mil_infer_")
         temp_yaml_path = clone_config_with_overrides(
-            base_config_path=args.yaml_path,
+            base_config_path=model_yaml_path,
             output_path=os.path.join(temp_dir, "runtime_infer.yaml"),
             overrides=config_overrides,
         )
@@ -217,15 +231,18 @@ def test(args):
     # Model
     device = runtime_device
     model = get_model_from_yaml(yaml_args).to(device)
-    model.load_state_dict(
-        load_torch_checkpoint(args.model_weight_path, map_location=device)
-    )
+    model_weight_path = args.model_weight_path or infer_cfg.get("model_weight_path") or common_cfg.get("model_weight_path")
+    if not model_weight_path:
+        raise ValueError("Model weight path is required for infer_mil.")
+    model.load_state_dict(load_torch_checkpoint(model_weight_path, map_location=device))
     model.eval()
 
-    out_dir = args.test_log_dir
+    out_dir = args.test_log_dir or infer_cfg.get("test_log_dir") or common_cfg.get("test_log_dir")
+    if not out_dir:
+        raise ValueError("test_log_dir is required for infer_mil.")
     os.makedirs(out_dir, exist_ok=True)
 
-    shutil.copyfile(temp_yaml_path or args.yaml_path, os.path.join(out_dir, "test.yaml"))
+    shutil.copyfile(temp_yaml_path or model_yaml_path, os.path.join(out_dir, "test.yaml"))
     shutil.copyfile(dataset_csv_path, os.path.join(out_dir, "test_dataset.csv"))
 
     # =====================================================
@@ -378,8 +395,8 @@ if __name__ == "__main__":
                         help="Feature directory for folder-first inference. Internal CSV will be generated automatically.")
     parser.add_argument("--feature_recursive", action="store_true",
                         help="Recursively scan --feature_dir for feature files.")
-    parser.add_argument("--model_weight_path", type=str, required=True)
-    parser.add_argument("--test_log_dir", type=str, required=True)
+    parser.add_argument("--model_weight_path", type=str, default=None)
+    parser.add_argument("--test_log_dir", type=str, default=None)
     parser.add_argument("--device", type=str, default=None,
                         help="Runtime device override. Examples: auto, cpu, 0, cuda:0.")
     parser.add_argument("--num_classes", type=int, default=None,

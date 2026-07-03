@@ -31,9 +31,14 @@ from utils.yaml_utils import read_yaml
 from utils.model_utils import get_model_from_yaml
 from utils.runtime_utils import (
     clone_config_with_overrides,
+    get_pipeline_section,
     infer_encoder_name_from_feature_dir,
     infer_feature_dim,
+    is_pipeline_yaml,
     load_torch_checkpoint,
+    merge_nested_dict,
+    read_plain_yaml,
+    resolve_model_yaml_path,
     select_runtime_device,
 )
 
@@ -43,7 +48,10 @@ from utils.runtime_utils import (
 # -----------------------------
 def parse_args():
     parser = argparse.ArgumentParser("WSI Heatmap + MIL (Full Pipeline)")
-    parser.add_argument("--config", type=str, required=True)
+    parser.add_argument("--yaml_path", type=str, required=False, default=None,
+                        help="Path to pipeline yaml or heatmap yaml. Defaults to draw_heatmap/heatmap.yaml.")
+    parser.add_argument("--config", type=str, required=False, default=None,
+                        help="Legacy alias of --yaml_path.")
     parser.add_argument("--wsi_dir", type=str, default=None, help="Override input WSI directory.")
     parser.add_argument("--feature_dir", type=str, default=None, help="Precomputed feature directory.")
     parser.add_argument("--coord_dir", type=str, default=None, help="Precomputed coordinate directory.")
@@ -155,7 +163,28 @@ def try_find_local_h5(slide_job_dir, encoder_name):
 # -----------------------------
 def main():
     args = parse_args()
-    cfg_path = args.config
+    default_heatmap_yaml = os.path.join(CURRENT_DIR, "heatmap.yaml")
+    cfg_path = args.yaml_path or args.config or default_heatmap_yaml
+    plain_cfg = read_plain_yaml(cfg_path)
+
+    if is_pipeline_yaml(plain_cfg):
+        common_cfg = get_pipeline_section(plain_cfg, "Common")
+        heatmap_cfg = get_pipeline_section(plain_cfg, "Heatmap")
+        base_heatmap_cfg = read_plain_yaml(default_heatmap_yaml)
+        cfg_dict = merge_nested_dict(base_heatmap_cfg, common_cfg)
+        cfg_dict = merge_nested_dict(cfg_dict, heatmap_cfg)
+        model_yaml_path = resolve_model_yaml_path(cfg_path, plain_cfg)
+        cfg_dict.setdefault("model", {})
+        cfg_dict["model"]["yaml_path"] = model_yaml_path
+    else:
+        cfg_dict = plain_cfg
+
+    temp_cfg_source_dir = tempfile.mkdtemp(prefix="tri_mil_heatmap_src_")
+    cfg_path = os.path.join(temp_cfg_source_dir, "resolved_heatmap.yaml")
+    with open(cfg_path, "w", encoding="utf-8") as handle:
+        import yaml as _yaml
+        _yaml.safe_dump(cfg_dict, handle, sort_keys=False, allow_unicode=True)
+
     cfg = read_yaml(cfg_path)
 
     runtime_overrides = {}
@@ -193,7 +222,7 @@ def main():
     if runtime_overrides:
         temp_cfg_dir = tempfile.mkdtemp(prefix="tri_mil_heatmap_")
         cfg_path = clone_config_with_overrides(
-            base_config_path=args.config,
+            base_config_path=cfg_path,
             output_path=os.path.join(temp_cfg_dir, "runtime_heatmap.yaml"),
             overrides=runtime_overrides,
         )
