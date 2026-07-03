@@ -12,6 +12,7 @@ from utils.runtime_utils import (
     clone_config_with_updates,
     collect_feature_files,
     get_pipeline_section,
+    get_pipeline_section_compat,
     infer_feature_dim,
     is_pipeline_yaml,
     read_plain_yaml,
@@ -25,7 +26,7 @@ def main(arg):
     pipeline_plain_cfg = read_plain_yaml(arg.yaml_path)
     if is_pipeline_yaml(pipeline_plain_cfg):
         common_cfg = get_pipeline_section(pipeline_plain_cfg, "Common")
-        train_cfg = get_pipeline_section(pipeline_plain_cfg, "Train")
+        train_cfg = get_pipeline_section_compat(pipeline_plain_cfg, "Train")
         model_yaml_path = resolve_model_yaml_path(arg.yaml_path, pipeline_plain_cfg)
 
         feature_dir = train_cfg.get("feature_dir") or common_cfg.get("feature_dir")

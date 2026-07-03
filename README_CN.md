@@ -25,7 +25,7 @@ Tri-MIL 将两部分能力整合到同一套工作流中：
 |---|---|---|
 | 预处理 | 读取 WSI、组织分割、坐标生成、特征提取 | `trident/`, `run_batch_of_slides.py`, `run_single_slide.py` |
 | 训练 | 基于配置文件训练 MIL 模型 | `configs/`, `modules/`, `process/`, `train_mil.py` |
-| 评估 | 测试模型并导出推理结果 | `test_mil.py`, `infer_mil.py` |
+| 评估 | 验证模型并导出指标或推理结果 | `valid_mil.py`, `infer_mil.py` |
 | 工具 | 数据集 CSV 准备、划分与可视化 | `prepare_dataset_csv.py`, `split_scripts/`, `vis_scripts/`, `draw_heatmap/` |
 
 ## 工作流
@@ -80,21 +80,21 @@ pip install -e .
 
 ### 2. 统一 YAML 工作流
 
-Tri-MIL 现在支持一份统一 pipeline YAML，同时驱动 `train_mil.py`、`test_mil.py`、`infer_mil.py` 和 `draw_heatmap.py`。
+Tri-MIL 现在支持一份统一 pipeline YAML，同时驱动 `train_mil.py`、`valid_mil.py`、`infer_mil.py` 和 `draw_heatmap.py`。
 
 可以直接使用 [configs/TRI_MIL_PIPELINE.yaml](D:/Desktop/Tri-MIL/configs/TRI_MIL_PIPELINE.yaml)：
 
 ```bash
 python train_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
-python test_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
+python valid_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
 python infer_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml --no_label
-python ./draw_heatmap/draw_heatmap.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
+python draw_heatmap.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
 ```
 
 推荐约定：
 
 - `Common.model_yaml_path` 指向具体 MIL 模型 YAML，例如 `./configs/TRANS_MIL.yaml`
-- `Train`、`Test`、`Infer`、`Heatmap` 只放各自阶段需要的运行参数
+- `Train`、`Valid`、`Infer`、`Heatmap` 只放各自阶段需要的运行参数
 - `draw_heatmap.py` 默认会读自己的通用 `heatmap.yaml`，如果传统一 pipeline yaml，则会自动合并 `Heatmap` 配置和 `Common.model_yaml_path`
 
 ### 3. 预处理与特征提取
@@ -178,7 +178,7 @@ python train_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
 有标签测试：
 
 ```bash
-python test_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
+python valid_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
 ```
 
 无标签推理：

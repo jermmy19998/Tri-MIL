@@ -16,6 +16,6 @@ nohup python run_batch_of_slides.py \
 
 # Unified YAML workflow
 python train_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
-python test_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
+python valid_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
 python infer_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml --no_label
-python ./draw_heatmap/draw_heatmap.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
+python draw_heatmap.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml

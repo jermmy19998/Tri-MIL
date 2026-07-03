@@ -32,6 +32,7 @@ from utils.model_utils import get_model_from_yaml
 from utils.runtime_utils import (
     clone_config_with_overrides,
     get_pipeline_section,
+    get_pipeline_section_compat,
     infer_encoder_name_from_feature_dir,
     infer_feature_dim,
     is_pipeline_yaml,
@@ -97,6 +98,84 @@ def build_slide_output_prefix(wsi_path, wsi_root):
     if rel_parent in (".", ""):
         return ""
     return sanitize_path_token(rel_parent)
+
+
+def is_blank(value):
+    return value is None or (isinstance(value, str) and value.strip() == "")
+
+
+def ensure_nested_dict(config, *keys):
+    cursor = config
+    for key in keys:
+        if key not in cursor or not isinstance(cursor[key], dict):
+            cursor[key] = {}
+        cursor = cursor[key]
+    return cursor
+
+
+def set_if_blank(config, path, value):
+    if is_blank(value):
+        return
+
+    keys = path.split(".")
+    cursor = config
+    for key in keys[:-1]:
+        if key not in cursor or not isinstance(cursor[key], dict):
+            cursor[key] = {}
+        cursor = cursor[key]
+
+    leaf_key = keys[-1]
+    if is_blank(cursor.get(leaf_key)):
+        cursor[leaf_key] = value
+
+
+def infer_coord_dir_from_feature_dir(feature_dir):
+    if is_blank(feature_dir):
+        return None
+
+    feature_dir = os.path.abspath(feature_dir)
+    parent_dir = os.path.dirname(feature_dir)
+    candidates = [
+        os.path.join(parent_dir, "patches"),
+        os.path.join(parent_dir, "coords"),
+    ]
+
+    for candidate in candidates:
+        if os.path.isdir(candidate):
+            return candidate
+
+    return None
+
+
+def apply_pipeline_heatmap_defaults(config, common_cfg, model_yaml_path):
+    ensure_nested_dict(config, "wsi")
+    ensure_nested_dict(config, "precomputed")
+    ensure_nested_dict(config, "patch_encoder")
+    ensure_nested_dict(config, "model")
+    ensure_nested_dict(config, "visualization")
+
+    set_if_blank(config, "model.yaml_path", model_yaml_path)
+    set_if_blank(config, "model.ckpt_path", common_cfg.get("model_weight_path"))
+    set_if_blank(config, "job_dir", common_cfg.get("job_dir"))
+    set_if_blank(config, "device", common_cfg.get("device"))
+    set_if_blank(config, "wsi.wsi_dir", common_cfg.get("wsi_dir"))
+    set_if_blank(config, "wsi.reader_type", common_cfg.get("reader_type"))
+    set_if_blank(config, "wsi.mpp", common_cfg.get("mpp"))
+    set_if_blank(config, "precomputed.feature_path", common_cfg.get("feature_dir"))
+    set_if_blank(config, "precomputed.coord_path", common_cfg.get("coord_dir"))
+    set_if_blank(config, "patch_encoder.model_name", common_cfg.get("patch_encoder"))
+
+    feature_dir = config.get("precomputed", {}).get("feature_path", "")
+    if not is_blank(feature_dir):
+        inferred_encoder = infer_encoder_name_from_feature_dir(feature_dir)
+        config["patch_encoder"]["model_name"] = inferred_encoder
+
+        if is_blank(config["precomputed"].get("coord_path")):
+            inferred_coord_dir = infer_coord_dir_from_feature_dir(feature_dir)
+            if inferred_coord_dir is not None:
+                config["precomputed"]["coord_path"] = inferred_coord_dir
+
+    return config
 
 
 def find_h5_in_dir(h5_dir, slide_id, require_patch):
@@ -169,13 +248,12 @@ def main():
 
     if is_pipeline_yaml(plain_cfg):
         common_cfg = get_pipeline_section(plain_cfg, "Common")
-        heatmap_cfg = get_pipeline_section(plain_cfg, "Heatmap")
+        heatmap_cfg = get_pipeline_section_compat(plain_cfg, "Heatmap")
         base_heatmap_cfg = read_plain_yaml(default_heatmap_yaml)
         cfg_dict = merge_nested_dict(base_heatmap_cfg, common_cfg)
         cfg_dict = merge_nested_dict(cfg_dict, heatmap_cfg)
         model_yaml_path = resolve_model_yaml_path(cfg_path, plain_cfg)
-        cfg_dict.setdefault("model", {})
-        cfg_dict["model"]["yaml_path"] = model_yaml_path
+        cfg_dict = apply_pipeline_heatmap_defaults(cfg_dict, common_cfg, model_yaml_path)
     else:
         cfg_dict = plain_cfg
 
@@ -186,6 +264,9 @@ def main():
         _yaml.safe_dump(cfg_dict, handle, sort_keys=False, allow_unicode=True)
 
     cfg = read_yaml(cfg_path)
+
+    if args.yaml_path is None and args.config is None:
+        print("[INFO] Using built-in draw_heatmap/heatmap.yaml. For simpler usage, prefer --yaml_path ./configs/TRI_MIL_PIPELINE.yaml.")
 
     runtime_overrides = {}
     if args.wsi_dir is not None:
@@ -240,6 +321,11 @@ def main():
     wsi_reader_type = wsi_cfg.get("reader_type", None)
     wsi_mpp = wsi_cfg.get("mpp", None)
     wsi_custom_mpp_keys = wsi_cfg.get("custom_mpp_keys", None)
+    if is_blank(wsi_cfg.get("wsi_dir")):
+        raise ValueError(
+            "Heatmap requires WSI input directory. Set Heatmap.wsi.wsi_dir in the pipeline YAML "
+            "or pass --wsi_dir."
+        )
     wsi_paths = collect_wsi_files(
         wsi_cfg["wsi_dir"],
         wsi_cfg.get("extensions", [".svs", ".tif", ".tiff"])
@@ -278,6 +364,16 @@ def main():
     # Load MIL model
     # -------------------------------------------------
     model_cfg = cfg["model"]
+    if is_blank(model_cfg.get("yaml_path")):
+        raise ValueError(
+            "Heatmap requires MIL yaml path. Set Common.model_yaml_path in the pipeline YAML "
+            "or pass --model_yaml."
+        )
+    if is_blank(model_cfg.get("ckpt_path")):
+        raise ValueError(
+            "Heatmap requires MIL checkpoint path. Set Common.model_weight_path in the pipeline YAML "
+            "or pass --model_ckpt."
+        )
     mil_yaml = read_yaml(model_cfg["yaml_path"])
 
     if "in_dim" in mil_yaml.get("Model", {}) and use_global_precomputed:

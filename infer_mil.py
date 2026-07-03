@@ -25,6 +25,7 @@ from utils.runtime_utils import (
     clone_config_with_overrides,
     create_infer_csv_from_feature_dir,
     get_pipeline_section,
+    get_pipeline_section_compat,
     infer_feature_dim,
     is_pipeline_yaml,
     load_torch_checkpoint,
@@ -127,7 +128,7 @@ def to_json_serializable(obj):
 def test(args):
     plain_cfg = read_plain_yaml(args.yaml_path)
     model_yaml_path = resolve_model_yaml_path(args.yaml_path, plain_cfg if is_pipeline_yaml(plain_cfg) else None)
-    infer_cfg = get_pipeline_section(plain_cfg, "Infer") if is_pipeline_yaml(plain_cfg) else {}
+    infer_cfg = get_pipeline_section_compat(plain_cfg, "Infer") if is_pipeline_yaml(plain_cfg) else {}
     common_cfg = get_pipeline_section(plain_cfg, "Common") if is_pipeline_yaml(plain_cfg) else {}
 
     yaml_args = read_yaml(model_yaml_path)

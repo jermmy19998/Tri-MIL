@@ -26,7 +26,7 @@ Its goal is to turn them into one practical workflow for weakly supervised whole
 |---|---|---|
 | Preprocessing | Read WSIs, segment tissue, generate patch coordinates, extract patch/slide features | `trident/`, `run_batch_of_slides.py`, `run_single_slide.py` |
 | Training | Train MIL models with a unified config-based interface | `configs/`, `modules/`, `process/`, `train_mil.py` |
-| Evaluation | Test checkpoints and export metrics / inference outputs | `test_mil.py`, `infer_mil.py` |
+| Evaluation | Validate checkpoints and export metrics / inference outputs | `valid_mil.py`, `infer_mil.py` |
 | Utilities | Prepare dataset CSVs, build splits, and visualize learned behavior | `prepare_dataset_csv.py`, `split_scripts/`, `vis_scripts/`, `draw_heatmap/` |
 
 ## Why Tri-MIL
@@ -118,22 +118,35 @@ pip install -e .
 
 ### 2. Unified YAML Workflow
 
-Tri-MIL now supports one pipeline YAML for `train_mil.py`, `test_mil.py`, `infer_mil.py`, and `draw_heatmap.py`.
+Tri-MIL now supports one pipeline YAML for `train_mil.py`, `valid_mil.py`, `infer_mil.py`, and `draw_heatmap.py`.
 
 Use [configs/TRI_MIL_PIPELINE.yaml](D:/Desktop/Tri-MIL/configs/TRI_MIL_PIPELINE.yaml) as the shared entrypoint:
 
 ```bash
 python train_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
-python test_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
+python valid_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
 python infer_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml --no_label
-python ./draw_heatmap/draw_heatmap.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
+python draw_heatmap.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
 ```
 
 Recommended convention:
 
 - `Common.model_yaml_path` points to the MIL model YAML such as `./configs/TRANS_MIL.yaml`
-- `Train`, `Test`, `Infer`, and `Heatmap` each store only their own runtime settings
-- `draw_heatmap.py` defaults to its built-in heatmap yaml, but if you pass the shared pipeline yaml it will automatically merge `Heatmap` settings and `Common.model_yaml_path`
+- `Common.model_weight_path`, `Common.wsi_dir`, `Common.feature_dir`, and optionally `Common.coord_dir` are shared by inference and heatmap
+- `Train`, `Valid`, `Infer`, and `Heatmap` each store only their own runtime settings
+- `draw_heatmap.py` defaults to its built-in heatmap yaml, but if you pass the shared pipeline yaml it will automatically reuse `Common.model_yaml_path`, `Common.model_weight_path`, `Common.wsi_dir`, and precomputed feature paths
+
+For the common precomputed-feature workflow, heatmap usually only needs the shared YAML. A typical setup is:
+
+```yaml
+Common:
+  model_yaml_path: ./configs/TRANS_MIL.yaml
+  model_weight_path: ./infer_out/best.pth
+  wsi_dir: ./wsis
+  feature_dir: ./trident_processed/20x_256px_0px_overlap/features_vit
+```
+
+If `coord_dir` is left empty, `draw_heatmap.py` will try to auto-detect `./patches` next to `feature_dir`.
 
 ### 3. Preprocess slides
 
@@ -207,10 +220,10 @@ python ./split_scripts/split_datasets_k_fold_train_val.py \
 python train_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
 ```
 
-### 6. Test a trained model
+### 6. Validate a trained model
 
 ```bash
-python test_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
+python valid_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
 ```
 
 ## Repository Structure
@@ -288,7 +301,7 @@ Tri-MIL currently includes the following MIL model configs and implementations:
 |---|---|
 | new WSI preprocessing pipeline | use the integrated preprocessing workflow |
 | new pathology FM feature extraction | use the embedded Trident-based feature stack |
-| MIL benchmarking or extension | use YAML configs with `train_mil.py` and `test_mil.py` |
+| MIL benchmarking or extension | use YAML configs with `train_mil.py` and `valid_mil.py` |
 | result inspection | use `infer_mil.py`, `vis_scripts/`, and `draw_heatmap/` |
 
 ## Notes

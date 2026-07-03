@@ -11,7 +11,7 @@ from sklearn.model_selection import StratifiedKFold
 
 
 SUPPORTED_FEATURE_SUFFIXES = (".h5", ".pt")
-PIPELINE_SECTION_NAMES = ("Common", "Train", "Test", "Infer", "Heatmap")
+PIPELINE_SECTION_NAMES = ("Common", "Train", "Valid", "Test", "Infer", "Heatmap")
 
 
 def read_plain_yaml(path: str) -> dict:
@@ -31,6 +31,17 @@ def is_pipeline_yaml(config: dict) -> bool:
 def get_pipeline_section(config: dict, section_name: str) -> dict:
     section = config.get(section_name, {})
     return section if isinstance(section, dict) else {}
+
+
+def get_pipeline_section_compat(config: dict, primary_name: str, legacy_names: tuple[str, ...] = ()) -> dict:
+    section = get_pipeline_section(config, primary_name)
+    if section:
+        return section
+    for legacy_name in legacy_names:
+        section = get_pipeline_section(config, legacy_name)
+        if section:
+            return section
+    return {}
 
 
 def resolve_model_yaml_path(yaml_path: str, pipeline_config: dict | None = None) -> str:

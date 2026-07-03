@@ -1,8 +1,13 @@
 Common:
   model_yaml_path: ./configs/TRANS_MIL.yaml
   model_weight_path: ""
+  wsi_dir: ""
   feature_dir: ""
+  coord_dir: ""
   feature_recursive: false
+  patch_encoder: ""
+  mpp: null
+  reader_type: null
   device: auto
 
 Train:
@@ -19,9 +24,9 @@ Train:
   num_classes: null
   log_dir: ""
 
-Test:
-  test_dataset_csv: ""
-  test_log_dir: ./test_out
+Valid:
+  valid_dataset_csv: ""
+  valid_log_dir: ./valid_out
   device: auto
 
 Infer:
