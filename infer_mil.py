@@ -222,10 +222,7 @@ def test(args):
             "test",
         )
     else:
-        if args.no_label:
-            test_ds = WSI_Dataset(dataset_csv_path, "test", mode="infer")
-        else:
-            test_ds = WSI_Dataset(dataset_csv_path, "test")
+        test_ds = WSI_Dataset(dataset_csv_path, "test", mode="infer")
 
     test_loader = DataLoader(test_ds, batch_size=1, shuffle=False)
 
@@ -402,8 +399,7 @@ if __name__ == "__main__":
                         help="Runtime device override. Examples: auto, cpu, 0, cuda:0.")
     parser.add_argument("--num_classes", type=int, default=None,
                         help="Optional runtime override for General.num_classes.")
-    parser.add_argument("--no_label", action="store_true",
-                        help="Enable inference without labels")
+    parser.set_defaults(no_label=True)
     args = parser.parse_args()
 
     test(args)

@@ -87,7 +87,7 @@ Tri-MIL 现在支持一份统一 pipeline YAML，同时驱动 `train_mil.py`、`
 ```bash
 python train_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
 python valid_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
-python infer_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml --no_label
+python infer_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
 python draw_heatmap.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
 ```
 
@@ -184,7 +184,7 @@ python valid_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
 无标签推理：
 
 ```bash
-python infer_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml --no_label
+python infer_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
 ```
 
 ## 仓库结构
