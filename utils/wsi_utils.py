@@ -89,15 +89,15 @@ class WSI_Dataset(Dataset):
 
     
 class CDP_MIL_WSI_Dataset(WSI_Dataset):
-    def __init__(self,dataset_info_csv_path,BeyesGuassian_pt_dir,group):
-        super(CDP_MIL_WSI_Dataset,self).__init__(dataset_info_csv_path,group)
+    def __init__(self,dataset_info_csv_path,BeyesGuassian_pt_dir,group,mode=None):
+        super(CDP_MIL_WSI_Dataset,self).__init__(dataset_info_csv_path,group,mode=mode)
         self.slide_path_list = [os.path.join(BeyesGuassian_pt_dir,os.path.basename(slide_path).replace('.pt', '_bayesian_gaussian.pt')) for slide_path in self.slide_path_list]
         
 
     
 class LONG_MIL_WSI_Dataset(WSI_Dataset):
-    def __init__(self,dataset_info_csv_path,h5_csv_path,group):
-        super(LONG_MIL_WSI_Dataset,self).__init__(dataset_info_csv_path,group)
+    def __init__(self,dataset_info_csv_path,h5_csv_path,group,mode=None):
+        super(LONG_MIL_WSI_Dataset,self).__init__(dataset_info_csv_path,group,mode=mode)
         self.h5_path_list = pd.read_csv(h5_csv_path)['h5_path'].dropna().values
 
     def __getitem__(self, idx):
@@ -105,16 +105,18 @@ class LONG_MIL_WSI_Dataset(WSI_Dataset):
         slide_name = os.path.basename(slide_path).replace('.pt','')
         h5_path = self._find_h5_path_by_slide_name(slide_name, self.h5_path_list)
         print(h5_path)
-        h5_file = h5py.File(h5_path, 'r')
-        coords = torch.from_numpy(np.array(h5_file['coords']))
-        label = int(self.labels_list[idx])
-        label = torch.tensor(label)
+        with h5py.File(h5_path, 'r') as h5_file:
+            coords = torch.from_numpy(np.array(h5_file['coords']))
         feat = torch.load(slide_path) 
         if len(feat.shape) == 3:
             feat = feat.squeeze(0) # (N,D)
         if len(coords.shape) == 3:
             coords = coords.squeeze(0) # (N,2)
         feat_with_coords = torch.cat([feat, coords], dim=-1) # (N,D+2) 
+        if self.mode == "infer":
+            return feat_with_coords, slide_path
+        label = int(self.labels_list[idx])
+        label = torch.tensor(label)
         return feat_with_coords,label 
     
     def _find_h5_path_by_slide_name(self, slide_name, h5_paths_list):
