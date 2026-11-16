@@ -1,17 +1,34 @@
 [tool.poetry]
-name = "trident"
-version = "0.3.0"
-description = "A package for preprocessing whole-slide images."
+name = "tri-mil"
+version = "0.4.0"
+description = "Whole-slide preprocessing, MIL classification, and survival prediction."
+packages = [{include = "trident"}, {include = "modules"}, {include = "process"}, {include = "utils"}]
+include = [
+    {path = "trident/**/*.json", format = ["sdist", "wheel"]},
+    {path = "configs/*.yaml", format = ["sdist", "wheel"]},
+    {path = "train_mil.py", format = ["sdist", "wheel"]},
+    {path = "valid_mil.py", format = ["sdist", "wheel"]},
+    {path = "infer_mil.py", format = ["sdist", "wheel"]},
+    {path = "run_batch_of_slides.py", format = ["sdist", "wheel"]},
+    {path = "run_single_slide.py", format = ["sdist", "wheel"]},
+    {path = "prepare_survival_csv.py", format = ["sdist", "wheel"]},
+    {path = "docs/licenses/*", format = ["sdist", "wheel"]},
+]
 authors = [
     "Guillaume Jaume <guillaume.jaume@unil.ch>",
     "Andrew Zhang <andrewzh@mit.edu>",
     "Paul Doucet <homedoucetpaul@gmail.com>"
 ]
 license = "CC BY-NC-ND 4.0"  
-repository = "https://github.com/mahmoodlab/TRIDENT"
+repository = "https://github.com/jermmy19998/Tri-MIL"
 
 [tool.poetry.dependencies]
-python = ">=3.10,<3.12"  # Support Python 3.10 and 3.11.
+python = ">=3.10,<3.13"
+pyyaml = "*"
+addict = "*"
+scikit-learn = "*"
+ruamel-yaml = "*"
+pytz = "*"
 ipywidgets = "*"
 torch = "*"
 torchvision = "*"
@@ -29,12 +46,14 @@ shapely = "*"
 requests = "*"
 huggingface_hub = "*"
 openslide-bin = "*"
-aicsimageio = "*"
+bioio = "*"
+bioio-ome-tiff = "*"
+bioio-tifffile = "*"
 pyvips = "*"
 
 # Core model dependencies (installed with `pip install -e .`)
-transformers = ">=4.40,<5"
-timm = "0.9.16"
+transformers = ">=4.51,<5"
+timm = ">=0.9.16,<2"
 einops = "*"
 einops_exts = "*"
 scipy = "*"
@@ -51,12 +70,14 @@ musk = { git = "https://github.com/lilab-stanford/MUSK", optional = true }
 gigapath = { git = "https://github.com/prov-gigapath/prov-gigapath.git", optional = true }
 madeleine = { git = "https://github.com/mahmoodlab/MADELEINE.git", optional = true }
 pylibCZIrw = { version = "*", optional = true }
+bioio-bioformats = { version = "*", optional = true }
 cf-units = { version = ">=3.1", optional = true }
 ngff-zarr = { version = ">=0.12", optional = true }
 zarr = { version = ">=3.0.0a0", optional = true }
 dask = { version = ">=2024.10", optional = true }
 
 [tool.poetry.extras]
+bioformats = ["bioio-bioformats"]
 patch-encoders = [
     "fairscale",
     "timm_ctp",
@@ -97,7 +118,8 @@ omezarr = [
 ]
 
 [tool.poetry.dev-dependencies]
-# Optional development dependencies 
+pytest = "*"
+ruff = "*"
 
 [tool.poetry.scripts]
 trident = "trident.cli:main"
@@ -109,10 +131,13 @@ trident-doctor = "trident.cli_doctor:main"
 requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
 
-[tool.poetry.package]
-include = [
-    { format = "file", path = "trident/slide_encoder_models/local_ckpts.json" },
-    { format = "file", path = "trident/patch_encoder_models/local_ckpts.json" },
-    { format = "file", path = "trident/segmentation_models/local_ckpts.json" },
-]
-include_package_data = true
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+select = ["E9", "F63", "F7", "F82", "D102", "D103", "D107"]

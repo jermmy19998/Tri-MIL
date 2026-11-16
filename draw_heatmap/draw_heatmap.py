@@ -48,24 +48,58 @@ from utils.runtime_utils import (
 # Args
 # -----------------------------
 def parse_args():
+    """Parse args."""
     parser = argparse.ArgumentParser("WSI Heatmap + MIL (Full Pipeline)")
-    parser.add_argument("--yaml_path", type=str, required=False, default=None,
-                        help="Path to pipeline yaml or heatmap yaml. Defaults to draw_heatmap/heatmap.yaml.")
-    parser.add_argument("--config", type=str, required=False, default=None,
-                        help="Legacy alias of --yaml_path.")
+    parser.add_argument(
+        "--yaml_path",
+        type=str,
+        required=False,
+        default=None,
+        help="Path to pipeline yaml or heatmap yaml. Defaults to draw_heatmap/heatmap.yaml.",
+    )
+    parser.add_argument(
+        "--config", type=str, required=False, default=None, help="Legacy alias of --yaml_path."
+    )
     parser.add_argument("--wsi_dir", type=str, default=None, help="Override input WSI directory.")
-    parser.add_argument("--feature_dir", type=str, default=None, help="Precomputed feature directory.")
-    parser.add_argument("--coord_dir", type=str, default=None, help="Precomputed coordinate directory.")
-    parser.add_argument("--model_ckpt", type=str, default=None, help="MIL checkpoint path override.")
+    parser.add_argument(
+        "--feature_dir", type=str, default=None, help="Precomputed feature directory."
+    )
+    parser.add_argument(
+        "--coord_dir", type=str, default=None, help="Precomputed coordinate directory."
+    )
+    parser.add_argument(
+        "--model_ckpt", type=str, default=None, help="MIL checkpoint path override."
+    )
     parser.add_argument("--model_yaml", type=str, default=None, help="MIL YAML path override.")
     parser.add_argument("--job_dir", type=str, default=None, help="Output directory override.")
-    parser.add_argument("--device", type=str, default=None, help="Runtime device override. Examples: auto, cpu, 0, cuda:0.")
-    parser.add_argument("--mpp", type=float, default=None, help="Override WSI mpp, useful for png/jpg inputs.")
-    parser.add_argument("--reader_type", type=str, default=None, help="Override WSI reader type. Example: image.")
-    parser.add_argument("--num_top_patches", type=int, default=None, help="Override number of top patches to save.")
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        help="Runtime device override. Examples: auto, cpu, 0, cuda:0.",
+    )
+    parser.add_argument(
+        "--mpp", type=float, default=None, help="Override WSI mpp, useful for png/jpg inputs."
+    )
+    parser.add_argument(
+        "--reader_type", type=str, default=None, help="Override WSI reader type. Example: image."
+    )
+    parser.add_argument(
+        "--num_top_patches", type=int, default=None, help="Override number of top patches to save."
+    )
     parser.add_argument("--vis_level", type=int, default=None, help="Override visualization level.")
-    parser.add_argument("--blur", dest="blur", action="store_true", help="Enable gaussian blur on the heatmap overlay.")
-    parser.add_argument("--no_blur", dest="blur", action="store_false", help="Disable gaussian blur on the heatmap overlay.")
+    parser.add_argument(
+        "--blur",
+        dest="blur",
+        action="store_true",
+        help="Enable gaussian blur on the heatmap overlay.",
+    )
+    parser.add_argument(
+        "--no_blur",
+        dest="blur",
+        action="store_false",
+        help="Disable gaussian blur on the heatmap overlay.",
+    )
     parser.set_defaults(blur=None)
     return parser.parse_args()
 
@@ -74,6 +108,7 @@ def parse_args():
 # Utils
 # -----------------------------
 def collect_wsi_files(wsi_dir, extensions):
+    """Collect wsi files."""
     paths = []
     for root, _, files in os.walk(wsi_dir):
         for name in files:
@@ -83,16 +118,19 @@ def collect_wsi_files(wsi_dir, extensions):
 
 
 def is_image_input(path):
+    """Is image input."""
     return os.path.splitext(path)[1].lower() in {".png", ".jpg", ".jpeg"}
 
 
 def sanitize_path_token(value):
+    """Sanitize path token."""
     token = str(value).replace("\\", "__").replace("/", "__").replace(" ", "_")
     token = token.replace(":", "")
     return token.strip("._") or "root"
 
 
 def build_slide_output_prefix(wsi_path, wsi_root):
+    """Build slide output prefix."""
     parent_dir = os.path.dirname(wsi_path)
     rel_parent = os.path.relpath(parent_dir, wsi_root)
     if rel_parent in (".", ""):
@@ -101,10 +139,12 @@ def build_slide_output_prefix(wsi_path, wsi_root):
 
 
 def is_blank(value):
+    """Is blank."""
     return value is None or (isinstance(value, str) and value.strip() == "")
 
 
 def ensure_nested_dict(config, *keys):
+    """Ensure nested dict."""
     cursor = config
     for key in keys:
         if key not in cursor or not isinstance(cursor[key], dict):
@@ -114,6 +154,7 @@ def ensure_nested_dict(config, *keys):
 
 
 def set_if_blank(config, path, value):
+    """Set if blank."""
     if is_blank(value):
         return
 
@@ -130,6 +171,7 @@ def set_if_blank(config, path, value):
 
 
 def infer_coord_dir_from_feature_dir(feature_dir):
+    """Infer coord dir from feature dir."""
     if is_blank(feature_dir):
         return None
 
@@ -148,6 +190,7 @@ def infer_coord_dir_from_feature_dir(feature_dir):
 
 
 def apply_pipeline_heatmap_defaults(config, common_cfg, model_yaml_path):
+    """Apply pipeline heatmap defaults."""
     ensure_nested_dict(config, "wsi")
     ensure_nested_dict(config, "precomputed")
     ensure_nested_dict(config, "patch_encoder")
@@ -179,6 +222,7 @@ def apply_pipeline_heatmap_defaults(config, common_cfg, model_yaml_path):
 
 
 def find_h5_in_dir(h5_dir, slide_id, require_patch):
+    """Find h5 in dir."""
     matches = []
     for name in os.listdir(h5_dir):
         if not name.endswith(".h5"):
@@ -196,14 +240,10 @@ def find_h5_in_dir(h5_dir, slide_id, require_patch):
 
     if len(matches) == 0:
         rule = "with patch" if require_patch else "without patch"
-        raise FileNotFoundError(
-            f"No .h5 {rule} file found for slide {slide_id} in {h5_dir}"
-        )
+        raise FileNotFoundError(f"No .h5 {rule} file found for slide {slide_id} in {h5_dir}")
 
     if len(matches) > 1:
-        raise RuntimeError(
-            f"Multiple .h5 files found for slide {slide_id}: {matches}"
-        )
+        raise RuntimeError(f"Multiple .h5 files found for slide {slide_id}: {matches}")
 
     return matches[0]
 
@@ -220,16 +260,8 @@ def try_find_local_h5(slide_job_dir, encoder_name):
     if not os.path.isdir(feat_dir) or not os.path.isdir(coord_dir):
         return None, None
 
-    feat_h5 = [
-        os.path.join(feat_dir, f)
-        for f in os.listdir(feat_dir)
-        if f.endswith(".h5")
-    ]
-    coord_h5 = [
-        os.path.join(coord_dir, f)
-        for f in os.listdir(coord_dir)
-        if f.endswith(".h5")
-    ]
+    feat_h5 = [os.path.join(feat_dir, f) for f in os.listdir(feat_dir) if f.endswith(".h5")]
+    coord_h5 = [os.path.join(coord_dir, f) for f in os.listdir(coord_dir) if f.endswith(".h5")]
 
     if len(feat_h5) == 1 and len(coord_h5) == 1:
         return feat_h5[0], coord_h5[0]
@@ -241,6 +273,7 @@ def try_find_local_h5(slide_job_dir, encoder_name):
 # Main
 # -----------------------------
 def main():
+    """Run the command-line workflow defined by this module."""
     args = parse_args()
     default_heatmap_yaml = os.path.join(CURRENT_DIR, "heatmap.yaml")
     cfg_path = args.yaml_path or args.config or default_heatmap_yaml
@@ -261,19 +294,24 @@ def main():
     cfg_path = os.path.join(temp_cfg_source_dir, "resolved_heatmap.yaml")
     with open(cfg_path, "w", encoding="utf-8") as handle:
         import yaml as _yaml
+
         _yaml.safe_dump(cfg_dict, handle, sort_keys=False, allow_unicode=True)
 
     cfg = read_yaml(cfg_path)
 
     if args.yaml_path is None and args.config is None:
-        print("[INFO] Using built-in draw_heatmap/heatmap.yaml. For simpler usage, prefer --yaml_path ./configs/TRI_MIL_PIPELINE.yaml.")
+        print(
+            "[INFO] Using built-in draw_heatmap/heatmap.yaml. For simpler usage, prefer --yaml_path ./configs/TRI_MIL_PIPELINE.yaml."
+        )
 
     runtime_overrides = {}
     if args.wsi_dir is not None:
         runtime_overrides["wsi.wsi_dir"] = args.wsi_dir
     if args.feature_dir is not None:
         runtime_overrides["precomputed.feature_path"] = args.feature_dir
-        runtime_overrides["patch_encoder.model_name"] = infer_encoder_name_from_feature_dir(args.feature_dir)
+        runtime_overrides["patch_encoder.model_name"] = infer_encoder_name_from_feature_dir(
+            args.feature_dir
+        )
     if args.coord_dir is not None:
         runtime_overrides["precomputed.coord_path"] = args.coord_dir
     if args.model_ckpt is not None:
@@ -327,8 +365,7 @@ def main():
             "or pass --wsi_dir."
         )
     wsi_paths = collect_wsi_files(
-        wsi_cfg["wsi_dir"],
-        wsi_cfg.get("extensions", [".svs", ".tif", ".tiff"])
+        wsi_cfg["wsi_dir"], wsi_cfg.get("extensions", [".svs", ".tif", ".tiff"])
     )
 
     if len(wsi_paths) == 0:
@@ -344,21 +381,12 @@ def main():
     coord_dir = pre_cfg.get("coord_path", "")
 
     use_global_precomputed = (
-        feature_dir
-        and coord_dir
-        and os.path.isdir(feature_dir)
-        and os.path.isdir(coord_dir)
+        feature_dir and coord_dir and os.path.isdir(feature_dir) and os.path.isdir(coord_dir)
     )
 
     if not use_global_precomputed:
-        segmentation_model = segmentation_model_factory(
-            cfg["segmentation"]["model_name"]
-        )
-        patch_encoder = (
-            patch_encoder_factory(cfg["patch_encoder"]["model_name"])
-            .eval()
-            .to(device)
-        )
+        segmentation_model = segmentation_model_factory(cfg["segmentation"]["model_name"])
+        patch_encoder = patch_encoder_factory(cfg["patch_encoder"]["model_name"]).eval().to(device)
 
     # -------------------------------------------------
     # Load MIL model
@@ -407,8 +435,7 @@ def main():
         attCls.load_state_dict(state["attCls"])
 
         mil_model = tuple(
-            m.to(device).eval()
-            for m in [classifier, attention, dimReduction, attCls]
+            m.to(device).eval() for m in [classifier, attention, dimReduction, attCls]
         )
 
         attention_kwargs = {
@@ -454,9 +481,7 @@ def main():
             coord_path = find_h5_in_dir(coord_dir, slide_id, True)
             print(f"[INFO] {slide_id}: USING GLOBAL PRECOMPUTED")
         else:
-            feature_path, coord_path = try_find_local_h5(
-                slide_job_dir, encoder_name
-            )
+            feature_path, coord_path = try_find_local_h5(slide_job_dir, encoder_name)
 
             if feature_path and coord_path:
                 print(f"[INFO] {slide_id}: REUSE LOCAL FEATURES")
@@ -473,9 +498,7 @@ def main():
                 )
 
                 slide.segment_tissue(
-                    segmentation_model=segmentation_model,
-                    job_dir=slide_job_dir,
-                    device=device
+                    segmentation_model=segmentation_model, job_dir=slide_job_dir, device=device
                 )
 
                 coord_cfg = cfg["patch_coords"]
@@ -483,16 +506,14 @@ def main():
                     target_mag=coord_cfg["target_mag"],
                     patch_size=coord_cfg["patch_size"],
                     overlap=coord_cfg["overlap"],
-                    save_coords=slide_job_dir
+                    save_coords=slide_job_dir,
                 )
 
                 feature_path = slide.extract_patch_features(
                     patch_encoder=patch_encoder,
                     coords_path=coord_path,
-                    save_features=os.path.join(
-                        slide_job_dir, f"features_{encoder_name}"
-                    ),
-                    device=device
+                    save_features=os.path.join(slide_job_dir, f"features_{encoder_name}"),
+                    device=device,
                 )
 
         # -------------------------------------------------
@@ -551,30 +572,28 @@ def main():
 
         print(f"[PRED] {output_slide_id} -> {pred_label} ({pred_prob:.4f})")
 
-        csv_rows.append([
-            output_slide_id,
-            wsi_path,
-            slide_prefix,
-            pred_idx,
-            pred_label,
-            pred_prob,
-            len(coords),
-            logits.cpu().numpy().tolist()
-        ])
+        csv_rows.append(
+            [
+                output_slide_id,
+                wsi_path,
+                slide_prefix,
+                pred_idx,
+                pred_label,
+                pred_prob,
+                len(coords),
+                logits.cpu().numpy().tolist(),
+            ]
+        )
 
         # -------------------------------------------------
         # Heatmap
         # -------------------------------------------------
-        heatmap_filename = (
-            f"{output_slide_id}_heatmap_{encoder_name}_{model_name}_{pred_label}.png"
-        )
-        topk_dir_name = (
-            f"{output_slide_id}_topk_{encoder_name}_{model_name}"
-        )
-        
+        heatmap_filename = f"{output_slide_id}_heatmap_{encoder_name}_{model_name}_{pred_label}.png"
+        topk_dir_name = f"{output_slide_id}_topk_{encoder_name}_{model_name}"
+
         if len(attn.shape) == 2:
             attn = attn.squeeze()
-            
+
         vis_cfg = cfg["visualization"]
         print("[HEATMAP] Generating Heatmap ......")
         visualize_heatmap(
@@ -588,7 +607,7 @@ def main():
             output_dir=slide_job_dir,
             blur=vis_cfg["blur"],
             filename=heatmap_filename,
-            topk_dir_name=topk_dir_name
+            topk_dir_name=topk_dir_name,
         )
         print("[HEATMAP]  Heatmap Generate Success......")
 
@@ -597,16 +616,18 @@ def main():
     # -------------------------------------------------
     with open(csv_path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow([
-            "slide_id",
-            "slide_path",
-            "slide_prefix",
-            "pred_idx",
-            "pred_label",
-            "pred_prob",
-            "num_patches",
-            "logits"
-        ])
+        writer.writerow(
+            [
+                "slide_id",
+                "slide_path",
+                "slide_prefix",
+                "pred_idx",
+                "pred_label",
+                "pred_prob",
+                "num_patches",
+                "logits",
+            ]
+        )
         writer.writerows(csv_rows)
 
     print("[INFO] ALL DONE")

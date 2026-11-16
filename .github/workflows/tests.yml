@@ -1,0 +1,19 @@
+name: Core regression tests
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.10', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -r requirements-test.txt
+      - run: python -m pytest -q
+      - run: python tools/document_functions.py
+      - run: ruff check .
+      - run: ruff format --check .

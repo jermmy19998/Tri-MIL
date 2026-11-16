@@ -15,9 +15,9 @@ def log(x, like):
         return x.torch()
 
     if not isinstance(x, Number):
-        raise TypeError('Not supported type: received {}, '
-                        'was expected LogTensor or Number'
-                        .format(type(x)))
+        raise TypeError(
+            "Not supported type: received {}, was expected LogTensor or Number".format(type(x))
+        )
 
     # transform x to variable / tensor of
     # same type and size as like
@@ -29,20 +29,24 @@ def log(x, like):
 
 
 def _imul_inplace(x1, x2):
+    """Imul inplace."""
     return x1.add_(x2)
 
 
 def _imul_outofplace(x1, x2):
+    """Imul outofplace."""
     return x1 + x2
 
 
 def _add_inplace(x1, x2):
+    """Add inplace."""
     M = torch.max(x1, x2)
     M.add_(((x1 - M).exp_().add_((x2 - M).exp_())).log_())
     return M
 
 
 def _add_outofplace(x1, x2):
+    """Add outofplace."""
     M = torch.max(x1, x2)
     return M + torch.log(torch.exp(x1 - M) + torch.exp(x2 - M))
 
@@ -52,7 +56,9 @@ class LogTensor(object):
     Stable log-representation for torch tensors
     _x stores the value in the log space
     """
+
     def __init__(self, x):
+        """Initialize the LogTensor instance and configure its dependencies."""
         super(LogTensor, self).__init__()
 
         self.var = isinstance(x, ag.Variable)
@@ -61,15 +67,18 @@ class LogTensor(object):
         self.imul = _imul_outofplace if self.var else _imul_inplace
 
     def __add__(self, other):
+        """Add."""
         other_x = log(other, like=self._x)
         return LogTensor(self.add(self._x, other_x))
 
     def __imul__(self, other):
+        """Imul."""
         other_x = log(other, like=self._x)
         self._x = self.imul(self._x, other_x)
         return self
 
     def __iadd__(self, other):
+        """Iadd."""
         other_x = log(other, like=self._x)
         self._x = self.add(self._x, other_x)
         return self
@@ -91,9 +100,11 @@ class LogTensor(object):
         return LogTensor(x)
 
     def __pow__(self, power):
+        """Pow."""
         return LogTensor(self._x * power)
 
     def __mul__(self, other):
+        """Mul."""
         other_x = log(other, like=self._x)
         x = self._x + other_x
         return LogTensor(x)
@@ -125,8 +136,9 @@ class LogTensor(object):
         return self._x
 
     def __repr__(self):
+        """Repr."""
         tensor = self._x.data if self.var else self._x
-        s = 'Log Tensor with value:\n{}'.format(tensor)
+        s = "Log Tensor with value:\n{}".format(tensor)
         return s
 
 

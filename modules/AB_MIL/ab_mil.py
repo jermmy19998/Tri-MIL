@@ -1,19 +1,24 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+
 def initialize_weights(module):
+    """Initialize weights."""
     for m in module.modules():
-        if isinstance(m,nn.Linear):
+        if isinstance(m, nn.Linear):
             # ref from clam
             nn.init.xavier_normal_(m.weight)
             if m.bias is not None:
                 m.bias.data.zero_()
-        elif isinstance(m,nn.LayerNorm):
+        elif isinstance(m, nn.LayerNorm):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
+
 class AB_MIL(nn.Module):
-    def __init__(self,L = 512,D = 128,num_classes = 2,dropout=0,act= nn.ReLU() ,in_dim = 512, rrt = None):
+    def __init__(self, L=512, D=128, num_classes=2, dropout=0, act=nn.ReLU(), in_dim=512, rrt=None):
+        """Initialize the AB_MIL instance and configure its dependencies."""
         super(AB_MIL, self).__init__()
         self.rrt = rrt
         self.in_dim = in_dim
@@ -22,28 +27,28 @@ class AB_MIL(nn.Module):
         self.D = D
         self.K = 1
         self.feature = [nn.Linear(in_dim, self.L)]
-        
+
         self.feature += [act]
 
         if dropout:
             self.feature += [nn.Dropout(dropout)]
-            
+
         if self.rrt != None:
             self.feature += [self.rrt]
 
         self.feature = nn.Sequential(*self.feature)
 
         self.attention = nn.Sequential(
-            nn.Linear(self.L, self.D),
-            nn.Tanh(),
-            nn.Linear(self.D, self.K)
+            nn.Linear(self.L, self.D), nn.Tanh(), nn.Linear(self.D, self.K)
         )
         self.classifier = nn.Sequential(
-            nn.Linear(self.L*self.K, self.num_classes),
+            nn.Linear(self.L * self.K, self.num_classes),
         )
 
         self.apply(initialize_weights)
-    def forward(self, x, return_WSI_attn = False, return_WSI_feature = False):
+
+    def forward(self, x, return_WSI_attn=False, return_WSI_feature=False):
+        """Compute the AB_MIL forward pass for the supplied input tensors."""
         forward_return = {}
         feature = self.feature(x)
         # feature = group_shuffle(feature)
@@ -54,12 +59,9 @@ class AB_MIL(nn.Module):
         A = F.softmax(A, dim=-1)  # softmax over N
         M = torch.mm(A, feature)  # 1,KxL
         logits = self.classifier(M)
-        forward_return['logits'] = logits
+        forward_return["logits"] = logits
         if return_WSI_feature:
-            forward_return['WSI_feature'] = M
+            forward_return["WSI_feature"] = M
         if return_WSI_attn:
-            forward_return['WSI_attn'] = A_ori
+            forward_return["WSI_attn"] = A_ori
         return forward_return
-
-
-

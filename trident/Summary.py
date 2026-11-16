@@ -11,10 +11,12 @@ from trident.State import load_all_states, atomic_write_json
 
 
 def _now_iso() -> str:
+    """Now iso."""
     return time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime())
 
 
 def _trident_version() -> str:
+    """Trident version."""
     try:
         from importlib.metadata import version as pkg_version
 
@@ -24,12 +26,14 @@ def _trident_version() -> str:
 
 
 def _ensure_runs_dir(job_dir: str) -> str:
+    """Ensure runs dir."""
     runs_dir = os.path.join(job_dir, "runs")
     os.makedirs(runs_dir, exist_ok=True)
     return runs_dir
 
 
 def _atomic_write_text(path: str, content: str) -> None:
+    """Atomic write text."""
     tmp = f"{path}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(content)
@@ -39,6 +43,7 @@ def _atomic_write_text(path: str, content: str) -> None:
 
 
 def _json_safe(value: Any) -> Any:
+    """Json safe."""
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     if isinstance(value, (list, tuple)):
@@ -82,6 +87,7 @@ def start_run(
 
 
 def _task_label(status: Any, reason: Any) -> str:
+    """Task label."""
     if not status:
         return "unknown"
     if reason:
@@ -89,14 +95,16 @@ def _task_label(status: Any, reason: Any) -> str:
     return str(status)
 
 
-def _aggregate_states(job_dir: str) -> Tuple[int, Dict[str, Any], Dict[str, Any]]:
+def _aggregate_states(job_dir: str) -> Tuple[int, Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
     """
     Returns:
-        (num_slides, task_counts, errors)
+        (num_slides, task_counts, grouped_counts, errors), where ``grouped_counts`` maps each
+        scoped task family (``<family>:<scope>``) to per-scope status counts.
     """
     states = load_all_states(job_dir)
     num_slides = len(states)
     task_counts: Dict[str, Any] = {}
+    grouped_counts: Dict[str, Any] = {}
     errors: Dict[str, Any] = {}
 
     for _, st in states.items():
@@ -119,25 +127,22 @@ def _aggregate_states(job_dir: str) -> Tuple[int, Dict[str, Any], Dict[str, Any]
             reason = t.get("reason")
             label = _task_label(status, reason)
 
-            if task_name.startswith("patch_features:"):
-                enc = task_name.split(":", 1)[1]
-                group = task_counts.setdefault("patch_features", {})
-                enc_counts = group.setdefault(enc, {})
-                enc_counts[label] = int(enc_counts.get(label, 0)) + 1
-            elif task_name.startswith("slide_features:"):
-                enc = task_name.split(":", 1)[1]
-                group = task_counts.setdefault("slide_features", {})
-                enc_counts = group.setdefault(enc, {})
-                enc_counts[label] = int(enc_counts.get(label, 0)) + 1
+            if ":" in task_name:
+                # Scoped task `<family>:<scope>` (per encoder, per coords config, ...).
+                family, scope = task_name.split(":", 1)
+                group = grouped_counts.setdefault(family, {})
+                scope_counts = group.setdefault(scope, {})
+                scope_counts[label] = int(scope_counts.get(label, 0)) + 1
             else:
                 counts = task_counts.setdefault(task_name, {})
                 counts[label] = int(counts.get(label, 0)) + 1
 
-    return num_slides, task_counts, errors
+    return num_slides, task_counts, grouped_counts, errors
 
 
 def _render_counts(counts: Dict[str, int]) -> str:
     # Stable ordering: completed/skipped/error/running/not_started/unknown then alpha for the rest.
+    """Render counts."""
     preferred = [
         "completed",
         "skipped",
@@ -148,6 +153,7 @@ def _render_counts(counts: Dict[str, int]) -> str:
     ]
 
     def key(k: str) -> Tuple[int, str]:
+        """Key."""
         base = k.split(" ", 1)[0]
         try:
             return (preferred.index(base), k)
@@ -165,8 +171,10 @@ def _render_run_section(
     manifest: Dict[str, Any],
     num_slides: int,
     task_counts: Dict[str, Any],
+    grouped_counts: Dict[str, Any],
     errors: Dict[str, Any],
 ) -> str:
+    """Render run section."""
     started_at = manifest.get("started_at") or "unknown"
     finished_at = manifest.get("finished_at") or "unfinished"
     status = manifest.get("status") or "unknown"
@@ -192,23 +200,21 @@ def _render_run_section(
 
     if num_slides == 0:
         lines.append("")
-        lines.append("> No `wsi_states/*.json` found yet for this job dir, so this summary only contains run metadata.")
+        lines.append(
+            "> No `wsi_states/*.json` found yet for this job dir, so this summary only contains run metadata."
+        )
         lines.append("")
         return "\n".join(lines)
 
     # Top-level tasks
-    for task_name in sorted(k for k in task_counts.keys() if k not in {"patch_features", "slide_features"}):
+    for task_name in sorted(task_counts.keys()):
         lines.append(f"- {task_name}: {_render_counts(task_counts[task_name])}")
 
-    # Grouped features
-    if "patch_features" in task_counts:
-        lines.append("- Patch features:")
-        for enc in sorted(task_counts["patch_features"].keys()):
-            lines.append(f"  - {enc}: {_render_counts(task_counts['patch_features'][enc])}")
-    if "slide_features" in task_counts:
-        lines.append("- Slide features:")
-        for enc in sorted(task_counts["slide_features"].keys()):
-            lines.append(f"  - {enc}: {_render_counts(task_counts['slide_features'][enc])}")
+    # Scoped task families (per encoder, per coords config, ...)
+    for family in sorted(grouped_counts.keys()):
+        lines.append(f"- {family.replace('_', ' ').capitalize()}:")
+        for scope in sorted(grouped_counts[family].keys()):
+            lines.append(f"  - {scope}: {_render_counts(grouped_counts[family][scope])}")
 
     if errors:
         lines.append(f"- Errors ({len(errors)}):")
@@ -247,13 +253,14 @@ def finalize_run(
     atomic_write_json(manifest_path, manifest)
 
     # Render and append a new section to summary.md
-    num_slides, task_counts, errors = _aggregate_states(job_dir)
+    num_slides, task_counts, grouped_counts, errors = _aggregate_states(job_dir)
     section = _render_run_section(
         run_id=run_id,
         tool=str(manifest.get("tool") or "unknown"),
         manifest=manifest,
         num_slides=num_slides,
         task_counts=task_counts,
+        grouped_counts=grouped_counts,
         errors=errors,
     )
 
@@ -269,4 +276,3 @@ def finalize_run(
             "- Per-run manifests live in `runs/*.json`.\n\n"
         )
     _atomic_write_text(summary_path, existing + section)
-

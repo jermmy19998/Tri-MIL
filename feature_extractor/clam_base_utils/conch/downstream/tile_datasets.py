@@ -3,18 +3,21 @@ import os
 import torch
 from torch.utils.data import Dataset
 
-class TileClassificationDataset(Dataset):
-    def __init__(self, 
-                 df, 
-                 data_source = None, 
-                 img_transforms = None,
-                 index_col = 'image_name',
-                 subdir_col = None,
-                 target_col = 'label', 
-                 target_transforms = None,
-                 label_map = None,
-                 dummy_size = 0):
 
+class TileClassificationDataset(Dataset):
+    def __init__(
+        self,
+        df,
+        data_source=None,
+        img_transforms=None,
+        index_col="image_name",
+        subdir_col=None,
+        target_col="label",
+        target_transforms=None,
+        label_map=None,
+        dummy_size=0,
+    ):
+        """Initialize the TileClassificationDataset instance and configure its dependencies."""
         self.label_map = label_map
         self.data_source = data_source
         self.index_col = index_col
@@ -26,15 +29,19 @@ class TileClassificationDataset(Dataset):
         self.dummy_size = dummy_size
 
     def __len__(self):
+        """Return the number of entries exposed by this TileClassificationDataset instance."""
         return len(self.data)
 
     def get_ids(self, ids):
+        """Get ids."""
         return self.data.loc[ids, self.index_col]
 
     def get_labels(self, ids):
+        """Get labels."""
         return self.data.loc[ids, self.target_col]
 
     def __getitem__(self, idx):
+        """Return the TileClassificationDataset entry at the requested index."""
         img_name = self.get_ids(idx)
         label = self.get_labels(idx)
 
@@ -56,8 +63,8 @@ class TileClassificationDataset(Dataset):
                     img_path = os.path.join(self.data_source, img_name)
             else:
                 img_path = img_name
-            img = Image.open(img_path).convert('RGB')
+            img = Image.open(img_path).convert("RGB")
             if self.img_transforms is not None:
                 img = self.img_transforms(img)
 
-        return {'img': img,  'label': label}
+        return {"img": img, "label": label}

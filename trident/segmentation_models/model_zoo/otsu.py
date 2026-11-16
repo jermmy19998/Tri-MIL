@@ -13,9 +13,9 @@ def mask_rgb(rgb: np.ndarray, mask: np.ndarray) -> np.ndarray:
 
     Taken from https://github.com/TIO-IKIM/CellViT
     """
-    assert (
-        rgb.shape[:-1] == mask.shape
-    ), "Mask and RGB shape are different. Cannot mask when source and mask have different dimension."
+    assert rgb.shape[:-1] == mask.shape, (
+        "Mask and RGB shape are different. Cannot mask when source and mask have different dimension."
+    )
     mask3 = mask[..., None]
     positive = np.where(mask3, rgb, 0)
     negative = np.where((~mask3) & (rgb > 0), 255, 0)
@@ -56,4 +56,3 @@ def apply_otsu_thresholding(tile: np.ndarray) -> np.ndarray:
     otsu_masking = sk_morphology.remove_small_holes(otsu_masking, 5000)
     otsu_thr = ~otsu_masking
     return otsu_thr.astype(np.uint8)
-

@@ -8,7 +8,6 @@ from trident.wsi_objects.WSI import WSI, ReadMode
 
 
 class OpenSlideWSI(WSI):
-
     def __init__(self, slide_path: str, **kwargs: Any) -> None:
         """
         Initialize an OpenSlideWSI instance.
@@ -20,7 +19,7 @@ class OpenSlideWSI(WSI):
                 Keyword arguments forwarded to the base `WSI` class. Most important key is:
                 - lazy_init (bool, default=True): Whether to defer loading WSI and metadata.
 
-        Please refer to WSI constructor for all parameters. 
+        Please refer to WSI constructor for all parameters.
 
         Example
         -------
@@ -94,10 +93,10 @@ class OpenSlideWSI(WSI):
         """
         mpp_keys = [
             openslide.PROPERTY_NAME_MPP_X,
-            'openslide.mirax.MPP',
-            'aperio.MPP',
-            'hamamatsu.XResolution',
-            'openslide.comment',
+            "openslide.mirax.MPP",
+            "aperio.MPP",
+            "hamamatsu.XResolution",
+            "openslide.comment",
         ]
 
         if custom_mpp_keys:
@@ -111,14 +110,14 @@ class OpenSlideWSI(WSI):
                 except ValueError:
                     continue
 
-        x_resolution = self.img.properties.get('tiff.XResolution')
-        unit = self.img.properties.get('tiff.ResolutionUnit')
+        x_resolution = self.img.properties.get("tiff.XResolution")
+        unit = self.img.properties.get("tiff.ResolutionUnit")
 
         if x_resolution and unit:
             try:
-                if unit.lower() == 'centimeter':
+                if unit.lower() == "centimeter":
                     return round(10000 / float(x_resolution), 4)
-                elif unit.upper() == 'INCH':
+                elif unit.upper() == "INCH":
                     return round(25400 / float(x_resolution), 4)
             except ValueError:
                 pass
@@ -133,7 +132,6 @@ class OpenSlideWSI(WSI):
         )
 
     def _fetch_magnification(self, custom_mpp_keys: Optional[List[str]] = None) -> int:
-
         """
         Retrieve estimated magnification from metadata.
 
@@ -166,7 +164,7 @@ class OpenSlideWSI(WSI):
         location: Tuple[int, int],
         level: int,
         size: Tuple[int, int],
-        read_as: ReadMode = 'pil',
+        read_as: ReadMode = "pil",
     ) -> Union[Image.Image, np.ndarray]:
         """
         Extract a specific region from the whole-slide image (WSI).
@@ -196,8 +194,9 @@ class OpenSlideWSI(WSI):
         >>> print(region.shape)
         (512, 512, 3)
         """
+        self._ensure_open()  # reopen the handle if this WSI is cold (e.g. unpickled in a worker)
         try:
-            region = self.img.read_region(location, level, size).convert('RGB')
+            region = self.img.read_region(location, level, size).convert("RGB")
 
         except openslide.lowlevel.OpenSlideError as e:
             warnings.warn(
@@ -212,29 +211,27 @@ class OpenSlideWSI(WSI):
                     downsample = self.level_downsamples[level]
                     fallback_size = (
                         max(1, round(size[0] * downsample)),
-                        max(1, round(size[1] * downsample))
+                        max(1, round(size[1] * downsample)),
                     )
-                    region = self.img.read_region(location, 0, fallback_size).convert('RGB')
+                    region = self.img.read_region(location, 0, fallback_size).convert("RGB")
 
                     resample_mode = (
-                        Image.Resampling.LANCZOS
-                        if hasattr(Image, 'Resampling')
-                        else Image.LANCZOS
+                        Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
                     )
                     region = region.resize(size, resample=resample_mode)
                 else:
-                    region = Image.new('RGB', size, (255, 255, 255))
+                    region = Image.new("RGB", size, (255, 255, 255))
 
             except Exception as fallback_e:
                 warnings.warn(
                     f"Fallback read failed at {location}, level {level}: {fallback_e}. "
                     f"Returning blank white image."
                 )
-                region = Image.new('RGB', size, (255, 255, 255))
+                region = Image.new("RGB", size, (255, 255, 255))
 
-        if read_as == 'pil':
+        if read_as == "pil":
             return region
-        elif read_as == 'numpy':
+        elif read_as == "numpy":
             return np.array(region)
         else:
             raise ValueError(f"Invalid `read_as` value: {read_as}. Must be 'pil', 'numpy'.")
@@ -259,5 +256,4 @@ class OpenSlideWSI(WSI):
         Returns:
             PIL.Image.Image: RGB thumbnail as a PIL Image.
         """
-        return self.img.get_thumbnail(size).convert('RGB')
-        
+        return self.img.get_thumbnail(size).convert("RGB")

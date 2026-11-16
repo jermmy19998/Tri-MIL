@@ -10,26 +10,28 @@ from timm.models.layers import Mlp, to_2tuple
 
 from .utils import freeze_batch_norm_2d
 
+
 class VisualModel(nn.Module):
     def __init__(
-            self,
-            embed_dim_contrast,
-            embed_dim_caption,
-            trunk,
-            image_size=224,
-            proj='',
-            proj_bias=False,
-            drop=0.,
-            global_average_pool=False,
-            use_attentional_pool_contrast=False,
-            use_attentional_pool_caption=False,
-            n_queries_contrast=1,
-            n_queries_caption=256,
-            attn_pooler_heads=8,
-            norm_layer=nn.LayerNorm,
-            output_tokens=False,
-            trunk_kwargs={}
+        self,
+        embed_dim_contrast,
+        embed_dim_caption,
+        trunk,
+        image_size=224,
+        proj="",
+        proj_bias=False,
+        drop=0.0,
+        global_average_pool=False,
+        use_attentional_pool_contrast=False,
+        use_attentional_pool_caption=False,
+        n_queries_contrast=1,
+        n_queries_caption=256,
+        attn_pooler_heads=8,
+        norm_layer=nn.LayerNorm,
+        output_tokens=False,
+        trunk_kwargs={},
     ):
+        """Initialize the VisualModel instance and configure its dependencies."""
         super().__init__()
 
         self.trunk = trunk
@@ -37,34 +39,52 @@ class VisualModel(nn.Module):
         self.image_size = to_2tuple(image_size)
         prev_chs = self.trunk.num_features
         head_layers = OrderedDict()
-        
+
         # whether to use attentional pooling
         self.use_attentional_pool_contrast = use_attentional_pool_contrast
         self.use_attentional_pool_caption = use_attentional_pool_caption
         self.global_average_pool = global_average_pool
         self.output_tokens = output_tokens
         if use_attentional_pool_contrast:
-            scale = prev_chs ** -0.5
-            self.attn_pool_contrast = AttentionalPooler(d_model=embed_dim_contrast, context_dim=prev_chs, n_head=attn_pooler_heads, n_queries=n_queries_contrast)
+            scale = prev_chs**-0.5
+            self.attn_pool_contrast = AttentionalPooler(
+                d_model=embed_dim_contrast,
+                context_dim=prev_chs,
+                n_head=attn_pooler_heads,
+                n_queries=n_queries_contrast,
+            )
             self.ln_contrast = norm_layer(embed_dim_contrast)
-            self.proj_contrast = nn.Parameter(scale * torch.randn(embed_dim_contrast, embed_dim_contrast))
+            self.proj_contrast = nn.Parameter(
+                scale * torch.randn(embed_dim_contrast, embed_dim_contrast)
+            )
         else:
-            assert proj, 'projection layer needed if not using attentional pooling.'
+            assert proj, "projection layer needed if not using attentional pooling."
             # NOTE attention pool ends with a projection layer, so proj should usually be set to '' if such pooling is used
-            if proj == 'linear':
-                head_layers['drop'] = nn.Dropout(drop)
-                head_layers['proj'] = nn.Linear(prev_chs, embed_dim_contrast, bias=proj_bias)
-            elif proj == 'mlp':
-                head_layers['mlp'] = Mlp(prev_chs, 2 * embed_dim_contrast, embed_dim_contrast, drop=(drop, 0), bias=(True, proj_bias))
+            if proj == "linear":
+                head_layers["drop"] = nn.Dropout(drop)
+                head_layers["proj"] = nn.Linear(prev_chs, embed_dim_contrast, bias=proj_bias)
+            elif proj == "mlp":
+                head_layers["mlp"] = Mlp(
+                    prev_chs,
+                    2 * embed_dim_contrast,
+                    embed_dim_contrast,
+                    drop=(drop, 0),
+                    bias=(True, proj_bias),
+                )
 
         self.head = nn.Sequential(head_layers)
 
         if use_attentional_pool_caption:
-            self.attn_pool_caption = AttentionalPooler(d_model=embed_dim_caption, context_dim=prev_chs, n_head=attn_pooler_heads, n_queries=n_queries_caption)
+            self.attn_pool_caption = AttentionalPooler(
+                d_model=embed_dim_caption,
+                context_dim=prev_chs,
+                n_head=attn_pooler_heads,
+                n_queries=n_queries_caption,
+            )
             self.ln_caption = norm_layer(embed_dim_caption)
 
     def lock(self, unlocked_groups=0, freeze_bn_stats=False):
-        """ lock modules
+        """lock modules
         Args:
             unlocked_groups (int): leave last n layer groups unlocked (default: 0)
         """
@@ -76,6 +96,7 @@ class VisualModel(nn.Module):
                 freeze_batch_norm_2d(self.trunk)
         else:
             from timm.models.helpers import group_parameters, group_modules
+
             matcher = self.trunk.group_matcher()
             gparams = group_parameters(self.trunk, matcher)
             max_layer_id = max(gparams.keys())
@@ -91,34 +112,41 @@ class VisualModel(nn.Module):
 
     @torch.jit.ignore
     def set_grad_checkpointing(self, enable=True):
+        """Set grad checkpointing."""
         try:
             self.trunk.set_grad_checkpointing(enable)
         except Exception as e:
-            logging.warning('grad checkpointing not supported for this timm image tower, continuing without...')
+            logging.warning(
+                "grad checkpointing not supported for this timm image tower, continuing without..."
+            )
 
     def _global_pool(self, x):
+        """Global pool."""
         if self.global_average_pool:
             return x.mean(dim=1), x
         else:
             return x[:, 0], x[:, 1:]
 
     def forward_project(self, x):
+        """Forward project."""
         if self.use_attentional_pool_contrast:
             x = x @ self.proj_contrast
             return x
         else:
             x = self.head(x)
             return x
-        
+
     def forward_attn_pool_caption(self, tokens, attn_mask=None):
+        """Forward attn pool caption."""
         if self.use_attentional_pool_caption:
             tokens = self.attn_pool_caption(tokens, attn_mask=attn_mask)
             tokens = self.ln_caption(tokens)
             return tokens
         else:
             raise NotImplementedError
-        
+
     def forward_no_head(self, x, normalize=False):
+        """Forward no head."""
         x = self.trunk(x, **self.trunk_kwargs)
         if self.use_attentional_pool_contrast:
             pooled = self.attn_pool_contrast(x)[:, 0]
@@ -130,10 +158,11 @@ class VisualModel(nn.Module):
         return pooled
 
     def forward(self, x):
+        """Compute the VisualModel forward pass for the supplied input tensors."""
         x = self.trunk(x, **self.trunk_kwargs)
         tokens = None
         if self.use_attentional_pool_contrast:
-            pooled = self.attn_pool_contrast(x)[:, 0] # single query
+            pooled = self.attn_pool_contrast(x)[:, 0]  # single query
             pooled = self.ln_contrast(pooled)
             pooled = pooled @ self.proj_contrast
         else:
@@ -145,10 +174,8 @@ class VisualModel(nn.Module):
             tokens = self.ln_caption(tokens)
         else:
             tokens = None
-        
+
         if self.output_tokens:
             return pooled, tokens
         else:
             return pooled
-
-        

@@ -10,14 +10,17 @@ from typing import Any, Dict, Optional
 
 def _now_iso() -> str:
     # ISO-ish without importing datetime everywhere; good enough for logs.
+    """Now iso."""
     return time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime())
 
 
 def _stable_slide_hash(slide_path: str) -> str:
+    """Stable slide hash."""
     return hashlib.sha1(slide_path.encode("utf-8", errors="ignore")).hexdigest()[:12]
 
 
 def _trident_version() -> str:
+    """Trident version."""
     try:
         from importlib.metadata import version as pkg_version
 
@@ -27,10 +30,14 @@ def _trident_version() -> str:
 
 
 def _is_probable_path(value: Any) -> bool:
-    return isinstance(value, str) and ("/" in value or value.startswith(".") or value.startswith("~"))
+    """Is probable path."""
+    return isinstance(value, str) and (
+        "/" in value or "\\" in value or value.startswith(".") or value.startswith("~")
+    )
 
 
 def _stat_path(path: str) -> Dict[str, Any]:
+    """Stat path."""
     try:
         st = os.stat(path)
         return {"path": path, "exists": True, "bytes": int(st.st_size)}
@@ -39,10 +46,12 @@ def _stat_path(path: str) -> Dict[str, Any]:
 
 
 def _prune_none(d: Dict[str, Any]) -> Dict[str, Any]:
+    """Prune none."""
     return {k: v for k, v in d.items() if v is not None}
 
 
 def _normalize_outputs(outputs: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize outputs."""
     out: Dict[str, Any] = {}
     for k, v in outputs.items():
         if _is_probable_path(v):
@@ -53,10 +62,12 @@ def _normalize_outputs(outputs: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _attempt_id() -> str:
+    """Attempt id."""
     return uuid.uuid4().hex[:12]
 
 
 def _ensure_task(tasks: Dict[str, Any], task: str) -> Dict[str, Any]:
+    """Ensure task."""
     t = tasks.setdefault(
         task,
         {
@@ -138,27 +149,29 @@ def _merge_attempt(t: Dict[str, Any], attempt_event: Dict[str, Any], final_statu
 
 
 def _recompute_summary(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Summarize task statuses. A scoped task name ``<family>:<scope>`` (e.g.
+    ``patch_features:uni_v1:20x_256px_0px_overlap``) is grouped under ``summary[<family>][<scope>]``,
+    so tasks added by downstream packages are grouped without being listed here."""
     tasks = state.get("tasks", {}) or {}
     summary: Dict[str, Any] = {}
-    patch_feats: Dict[str, str] = {}
-    slide_feats: Dict[str, str] = {}
+    grouped: Dict[str, Dict[str, str]] = {}
 
     for task_name, t in tasks.items():
         status = t.get("status")
         reason = t.get("reason")
         label = status if not reason else f"{status} ({reason})"
-        if task_name.startswith("patch_features:"):
-            patch_feats[task_name.split(":", 1)[1]] = label
-        elif task_name.startswith("slide_features:"):
-            slide_feats[task_name.split(":", 1)[1]] = label
+        if ":" in task_name:
+            family, scope = task_name.split(":", 1)
+            grouped.setdefault(family, {})[scope] = label
         else:
             summary[task_name] = label
 
-    if patch_feats:
-        summary["patch_features"] = patch_feats
-    if slide_feats:
-        summary["slide_features"] = slide_feats
-
+    for family, scopes in grouped.items():
+        # An unscoped task of the same family (e.g. "coords", written by an older version in the
+        # same job dir) is kept under the "unscoped" key instead of being overwritten.
+        if family in summary:
+            scopes = {"unscoped": summary[family], **scopes}
+        summary[family] = scopes
     state["summary"] = summary
     return summary
 
@@ -171,6 +184,7 @@ def _update_resume(
     message: Optional[str],
     attempt: Optional[Dict[str, Any]],
 ) -> None:
+    """Update resume."""
     resume = state.setdefault("resume", {})
     resume["last_task"] = task
     resume["last_status"] = status
@@ -183,9 +197,16 @@ def _update_resume(
             "message": message,
             "error": (attempt or {}).get("error") if attempt else message,
         }
+    else:
+        # A later non-error outcome for the same task resolves a prior recorded error;
+        # drop the stale `last_error` so a recovered slide doesn't keep reporting it.
+        prev_error = resume.get("last_error")
+        if isinstance(prev_error, dict) and prev_error.get("task") == task:
+            resume.pop("last_error", None)
 
 
 def ensure_states_dir(job_dir: str) -> str:
+    """Ensure states dir."""
     states_dir = os.path.join(job_dir, "wsi_states")
     os.makedirs(states_dir, exist_ok=True)
     return states_dir
@@ -204,6 +225,7 @@ def state_path(job_dir: str, wsi_name: str, slide_path: str) -> str:
 
 
 def atomic_write_json(path: str, data: Dict[str, Any]) -> None:
+    """Atomic write json."""
     tmp = f"{path}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, sort_keys=True)
@@ -212,11 +234,13 @@ def atomic_write_json(path: str, data: Dict[str, Any]) -> None:
 
 
 def load_state(path: str) -> Dict[str, Any]:
+    """Load state."""
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
 def load_all_states(job_dir: str) -> Dict[str, Dict[str, Any]]:
+    """Load all states."""
     states_dir = os.path.join(job_dir, "wsi_states")
     if not os.path.isdir(states_dir):
         return {}
@@ -258,7 +282,9 @@ def make_slide_ref(
     }
 
 
-def make_attempt(event: str, *, error: Optional[str] = None, extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def make_attempt(
+    event: str, *, error: Optional[str] = None, extra: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     """
     Create a human-readable attempt/event record.
 
@@ -277,6 +303,7 @@ def make_attempt(event: str, *, error: Optional[str] = None, extra: Optional[Dic
 
 
 def _base_state(slide: Dict[str, Any], wsi_meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Base state."""
     return {
         "schema_version": 2,
         "trident_version": _trident_version(),
@@ -354,8 +381,10 @@ def update_task_state(
     tasks = state.setdefault("tasks", {})
     t = _ensure_task(tasks, task)
     t["status"] = status
-    if reason is not None:
-        t["reason"] = reason
+    # Always reflect the latest outcome's reason (None for a clean success). Without this,
+    # a task that was skipped (e.g. "geojson_not_found") and later completed would keep the
+    # stale skip-reason, producing contradictory summaries like "completed (geojson_not_found)".
+    t["reason"] = reason
     if message is not None:
         t["message"] = message
     else:
@@ -372,4 +401,3 @@ def update_task_state(
     _update_resume(state, task, status, reason, message, attempt)
 
     atomic_write_json(fp, state)
-

@@ -43,11 +43,13 @@ MANIFOLD_PATH_SEP = "|"
 
 class FileContentsAction(argparse.Action):
     def __init__(self, option_strings, dest, nargs=None, **kwargs):
+        """Initialize the FileContentsAction instance and configure its dependencies."""
         if nargs is not None:
             raise ValueError("nargs not allowed")
         super(FileContentsAction, self).__init__(option_strings, dest, **kwargs)
 
     def __call__(self, parser, namespace, values, option_string=None):
+        """Call."""
         from fairseq.file_io import PathManager
 
         if PathManager.isfile(values):
@@ -59,12 +61,12 @@ class FileContentsAction(argparse.Action):
 
 
 def split_paths(paths: str, separator=os.pathsep) -> List[str]:
-    return (
-        paths.split(separator) if "://" not in paths else paths.split(MANIFOLD_PATH_SEP)
-    )
+    """Split paths."""
+    return paths.split(separator) if "://" not in paths else paths.split(MANIFOLD_PATH_SEP)
 
 
 def load_ensemble_for_inference(filenames, task, model_arg_overrides=None):
+    """Load ensemble for inference."""
     from fairseq import checkpoint_utils
 
     deprecation_warning(
@@ -77,17 +79,17 @@ def load_ensemble_for_inference(filenames, task, model_arg_overrides=None):
 
 
 def apply_to_sample(f, sample):
+    """Apply to sample."""
     if hasattr(sample, "__len__") and len(sample) == 0:
         return {}
 
     def _apply(x):
+        """Apply."""
         if torch.is_tensor(x):
             return f(x)
         elif isinstance(x, collections.OrderedDict):
             # OrderedDict has attributes that needs to be preserved
-            od = collections.OrderedDict(
-                (key, _apply(value)) for key, value in x.items()
-            )
+            od = collections.OrderedDict((key, _apply(value)) for key, value in x.items())
             od.__dict__ = x.__dict__
             return od
         elif isinstance(x, dict):
@@ -105,20 +107,25 @@ def apply_to_sample(f, sample):
 
 
 def move_to_cuda(sample, device=None):
+    """Move to cuda."""
     device = device or torch.cuda.current_device()
 
     def _move_to_cuda(tensor):
         # non_blocking is ignored if tensor is not pinned, so we can always set
         # to True (see github.com/PyTorchLightning/pytorch-lightning/issues/620)
+        """Move to cuda."""
         return tensor.to(device=device, non_blocking=True)
 
     return apply_to_sample(_move_to_cuda, sample)
 
 
 def move_to_cpu(sample):
+    """Move to cpu."""
+
     def _move_to_cpu(tensor):
         # PyTorch has poor support for half tensors (float16) on CPU.
         # Move any such tensors to float32.
+        """Move to cpu."""
         if tensor.dtype in {torch.bfloat16, torch.float16}:
             tensor = tensor.to(dtype=torch.float32)
         return tensor.cpu()
@@ -127,12 +134,13 @@ def move_to_cpu(sample):
 
 
 def move_to_tpu(sample):
-
+    """Move to tpu."""
     import torch_xla.core.xla_model as xm
 
     device = xm.xla_device()
 
     def _move_to_tpu(tensor):
+        """Move to tpu."""
         return tensor.to(device)
 
     return apply_to_sample(_move_to_tpu, sample)
@@ -162,6 +170,7 @@ def set_incremental_state(
 
 
 def load_align_dict(replace_unk):
+    """Load align dict."""
     if replace_unk is None:
         align_dict = None
     elif isinstance(replace_unk, str) and len(replace_unk) > 0:
@@ -179,6 +188,7 @@ def load_align_dict(replace_unk):
 
 
 def print_embed_overlap(embed_dict, vocab_dict):
+    """Print embed overlap."""
     embed_keys = set(embed_dict.keys())
     vocab_keys = set(vocab_dict.symbols)
     overlap = len(embed_keys & vocab_keys)
@@ -201,13 +211,12 @@ def parse_embedding(embed_path):
         next(f_embed)  # skip header
         for line in f_embed:
             pieces = line.rstrip().split(" ")
-            embed_dict[pieces[0]] = torch.Tensor(
-                [float(weight) for weight in pieces[1:]]
-            )
+            embed_dict[pieces[0]] = torch.Tensor([float(weight) for weight in pieces[1:]])
     return embed_dict
 
 
 def load_embedding(embed_dict, vocab, embedding):
+    """Load embedding."""
     for idx in range(len(vocab)):
         token = vocab[idx]
         if token in embed_dict:
@@ -216,6 +225,7 @@ def load_embedding(embed_dict, vocab, embedding):
 
 
 def replace_unk(hypo_str, src_str, alignment, align_dict, unk):
+    """Replace unk."""
     from fairseq import tokenizer
 
     # Tokens are strings here
@@ -239,13 +249,12 @@ def post_process_prediction(
     remove_bpe=None,
     extra_symbols_to_ignore=None,
 ):
+    """Post process prediction."""
     hypo_str = tgt_dict.string(
         hypo_tokens, remove_bpe, extra_symbols_to_ignore=extra_symbols_to_ignore
     )
     if align_dict is not None:
-        hypo_str = replace_unk(
-            hypo_str, src_str, alignment, align_dict, tgt_dict.unk_string()
-        )
+        hypo_str = replace_unk(hypo_str, src_str, alignment, align_dict, tgt_dict.unk_string())
     if align_dict is not None or remove_bpe is not None:
         # Convert back to tokens for evaluating with unk replacement or without BPE
         # Note that the dictionary can be modified inside the method.
@@ -267,10 +276,12 @@ def make_positions(tensor, padding_idx: int, onnx_trace: bool = False):
 
 
 def strip_pad(tensor, pad):
+    """Strip pad."""
     return tensor[tensor.ne(pad)]
 
 
 def buffered_arange(max, device="cpu"):
+    """Buffered arange."""
     if not hasattr(buffered_arange, "buf"):
         buffered_arange.buf = torch.LongTensor().to(device)
     if max > buffered_arange.buf.numel():
@@ -282,6 +293,7 @@ def buffered_arange(max, device="cpu"):
 def convert_padding_direction(
     src_tokens, padding_idx, right_to_left: bool = False, left_to_right: bool = False
 ):
+    """Convert padding direction."""
     assert right_to_left ^ left_to_right
     pad_mask = src_tokens.eq(padding_idx)
     if not pad_mask.any():
@@ -308,6 +320,7 @@ def convert_padding_direction(
 
 def item(tensor):
     # tpu-comment: making this a no-op for xla devices.
+    """Item."""
     if torch.is_tensor(tensor) and tensor.device.type == "xla":
         return tensor.detach()
     if hasattr(tensor, "item"):
@@ -318,6 +331,7 @@ def item(tensor):
 
 
 def multi_tensor_total_norm(grads, chunk_size=2048 * 32) -> torch.Tensor:
+    """Multi tensor total norm."""
     per_device_grads = {}
     norms = []
     for grad in grads:
@@ -333,9 +347,7 @@ def multi_tensor_total_norm(grads, chunk_size=2048 * 32) -> torch.Tensor:
             # TODO(msb) return has_inf
             has_inf = torch.zeros((1, 1), dtype=torch.int, device=device)
             with torch.cuda.device(device):
-                norm = multi_tensor_l2norm(
-                    chunk_size, has_inf, [cur_device_grads], False
-                )
+                norm = multi_tensor_l2norm(chunk_size, has_inf, [cur_device_grads], False)
             norms.append(norm[0].to(torch.cuda.current_device()))
         else:
             norms += [torch.norm(g, p=2, dtype=torch.float32) for g in cur_device_grads]
@@ -345,18 +357,17 @@ def multi_tensor_total_norm(grads, chunk_size=2048 * 32) -> torch.Tensor:
 
 @torch.no_grad()
 def clip_grad_norm_(params, max_norm, aggregate_norm_fn=None) -> torch.Tensor:
+    """Clip grad norm."""
+
     def grad_exists(p):
+        """Grad exists."""
         return p is not None and getattr(p, "grad", None) is not None
 
     if isinstance(params, torch.Tensor):
         params = [params]
     params = list(params)
-    grads = [
-        p.grad.detach() for p in params if grad_exists(p) and not hasattr(p, "expert")
-    ]
-    expert_grads = [
-        p.grad.detach() for p in params if grad_exists(p) and hasattr(p, "expert")
-    ]
+    grads = [p.grad.detach() for p in params if grad_exists(p) and not hasattr(p, "expert")]
+    expert_grads = [p.grad.detach() for p in params if grad_exists(p) and hasattr(p, "expert")]
 
     if len(grads) == 0:
         if len(params) > 0:
@@ -381,9 +392,7 @@ def clip_grad_norm_(params, max_norm, aggregate_norm_fn=None) -> torch.Tensor:
             else:
                 device = torch.device("cpu")
             total_norm = torch.norm(
-                torch.stack(
-                    [torch.norm(g, p=2, dtype=torch.float32).to(device) for g in grads]
-                )
+                torch.stack([torch.norm(g, p=2, dtype=torch.float32).to(device) for g in grads])
             )
 
     if aggregate_norm_fn is not None:
@@ -406,6 +415,7 @@ def _match_types(arg1, arg2):
     """Convert the numerical argument to the same type as the other argument"""
 
     def upgrade(arg_number, arg_structure):
+        """Upgrade."""
         if isinstance(arg_structure, tuple):
             return tuple([arg_number] * len(arg_structure))
         elif isinstance(arg_structure, dict):
@@ -428,6 +438,7 @@ def resolve_max_positions(*args):
     """Resolve max position constraints from multiple sources."""
 
     def map_value_update(d1, d2):
+        """Map value update."""
         updated_value = copy.deepcopy(d1)
         for key in d2:
             if key not in updated_value:
@@ -437,6 +448,7 @@ def resolve_max_positions(*args):
         return updated_value
 
     def nullsafe_min(l):
+        """Nullsafe min."""
         minim = None
         for item in l:
             if minim is None:
@@ -462,19 +474,16 @@ def resolve_max_positions(*args):
 
 
 def import_user_module(args):
+    """Import user module."""
     module_path = getattr(args, "user_dir", None)
     if module_path is not None:
         module_path = os.path.abspath(args.user_dir)
-        if not os.path.exists(module_path) and not os.path.isfile(
-            os.path.dirname(module_path)
-        ):
+        if not os.path.exists(module_path) and not os.path.isfile(os.path.dirname(module_path)):
             fairseq_rel_path = os.path.join(os.path.dirname(__file__), args.user_dir)
             if os.path.exists(fairseq_rel_path):
                 module_path = fairseq_rel_path
             else:
-                fairseq_rel_path = os.path.join(
-                    os.path.dirname(__file__), "..", args.user_dir
-                )
+                fairseq_rel_path = os.path.join(os.path.dirname(__file__), "..", args.user_dir)
                 if os.path.exists(fairseq_rel_path):
                     module_path = fairseq_rel_path
                 else:
@@ -512,6 +521,7 @@ def import_user_module(args):
 
 
 def softmax(x, dim: int, onnx_trace: bool = False):
+    """Softmax."""
     if onnx_trace:
         return F.softmax(x.float(), dim=dim)
     else:
@@ -519,6 +529,7 @@ def softmax(x, dim: int, onnx_trace: bool = False):
 
 
 def log_softmax(x, dim: int, onnx_trace: bool = False):
+    """Log softmax."""
     if onnx_trace:
         return F.log_softmax(x.float(), dim=dim)
     else:
@@ -526,6 +537,7 @@ def log_softmax(x, dim: int, onnx_trace: bool = False):
 
 
 def get_perplexity(loss, round=2, base=2):
+    """Get perplexity."""
     from fairseq.logging.meters import safe_round
 
     if loss is None:
@@ -538,10 +550,12 @@ def get_perplexity(loss, round=2, base=2):
 
 def deprecation_warning(message, stacklevel=3):
     # don't use DeprecationWarning, since it's ignored by default
+    """Deprecation warning."""
     warnings.warn(message, stacklevel=stacklevel)
 
 
 def relu_squared(x: torch.Tensor):
+    """Relu squared."""
     return F.relu(x).pow(2)
 
 
@@ -556,9 +570,7 @@ def get_activation_fn(activation: str) -> Callable:
     elif activation == "gelu":
         return gelu
     elif activation == "gelu_fast":
-        deprecation_warning(
-            "--activation-fn=gelu_fast has been renamed to gelu_accurate"
-        )
+        deprecation_warning("--activation-fn=gelu_fast has been renamed to gelu_accurate")
         return gelu_accurate
     elif activation == "gelu_accurate":
         return gelu_accurate
@@ -573,6 +585,7 @@ def get_activation_fn(activation: str) -> Callable:
 
 
 def get_available_activation_fns() -> List:
+    """Get available activation fns."""
     return [
         "relu",
         "gelu",
@@ -585,6 +598,7 @@ def get_available_activation_fns() -> List:
 
 @contextlib.contextmanager
 def model_eval(model):
+    """Model eval."""
     is_training = model.training
     model.eval()
     yield
@@ -592,6 +606,7 @@ def model_eval(model):
 
 
 def has_parameters(module):
+    """Has parameters."""
     try:
         next(module.parameters())
         return True
@@ -600,6 +615,7 @@ def has_parameters(module):
 
 
 def get_rng_state():
+    """Get rng state."""
     state = {"torch_rng_state": torch.get_rng_state()}
     if xm is not None:
         state["xla_rng_state"] = xm.get_rng_state()
@@ -609,6 +625,7 @@ def get_rng_state():
 
 
 def set_rng_state(state):
+    """Set rng state."""
     torch.set_rng_state(state["torch_rng_state"])
     if xm is not None:
         xm.set_rng_state(state["xla_rng_state"])
@@ -618,6 +635,7 @@ def set_rng_state(state):
 
 class set_torch_seed(object):
     def __init__(self, seed):
+        """Initialize the set_torch_seed instance and configure its dependencies."""
         assert isinstance(seed, int)
         self.rng_state = get_rng_state()
 
@@ -628,9 +646,11 @@ class set_torch_seed(object):
             torch.cuda.manual_seed(seed)
 
     def __enter__(self):
+        """Enter."""
         return self
 
     def __exit__(self, *exc):
+        """Exit."""
         set_rng_state(self.rng_state)
 
 
@@ -656,6 +676,7 @@ def parse_alignment(line):
 
 
 def get_token_to_word_mapping(tokens, exclude_list):
+    """Get token to word mapping."""
     n = len(tokens)
     word_start = [int(token not in exclude_list) for token in tokens]
     word_idx = list(accumulate(word_start))
@@ -664,12 +685,9 @@ def get_token_to_word_mapping(tokens, exclude_list):
 
 
 def extract_hard_alignment(attn, src_sent, tgt_sent, pad, eos):
-    tgt_valid = (
-        ((tgt_sent != pad) & (tgt_sent != eos)).nonzero(as_tuple=False).squeeze(dim=-1)
-    )
-    src_invalid = (
-        ((src_sent == pad) | (src_sent == eos)).nonzero(as_tuple=False).squeeze(dim=-1)
-    )
+    """Extract hard alignment."""
+    tgt_valid = ((tgt_sent != pad) & (tgt_sent != eos)).nonzero(as_tuple=False).squeeze(dim=-1)
+    src_invalid = ((src_sent == pad) | (src_sent == eos)).nonzero(as_tuple=False).squeeze(dim=-1)
     src_token_to_word = get_token_to_word_mapping(src_sent, [eos, pad])
     tgt_token_to_word = get_token_to_word_mapping(tgt_sent, [eos, pad])
     alignment = []
@@ -688,14 +706,13 @@ def extract_hard_alignment(attn, src_sent, tgt_sent, pad, eos):
 
 
 def extract_soft_alignment(attn, src_sent, tgt_sent, pad, eos):
-    tgt_valid = ((tgt_sent != pad)).nonzero(as_tuple=False)
-    src_valid = ((src_sent != pad)).nonzero(as_tuple=False).squeeze(dim=-1)
+    """Extract soft alignment."""
+    tgt_valid = (tgt_sent != pad).nonzero(as_tuple=False)
+    src_valid = (src_sent != pad).nonzero(as_tuple=False).squeeze(dim=-1)
     alignment = []
     if len(tgt_valid) != 0 and len(src_valid) != 0:
         attn_valid = attn[tgt_valid, src_valid]
-        alignment = [
-            ["{:.6f}".format(p) for p in src_probs.tolist()] for src_probs in attn_valid
-        ]
+        alignment = [["{:.6f}".format(p) for p in src_probs.tolist()] for src_probs in attn_valid]
     return alignment
 
 
@@ -710,10 +727,12 @@ def new_arange(x, *size):
 
 
 def get_tpu_device():
+    """Get tpu device."""
     return xm.xla_device()
 
 
 def tpu_data_loader(itr):
+    """Tpu data loader."""
     import torch_xla.core.xla_model as xm
     import torch_xla.distributed.parallel_loader as pl
 
@@ -730,10 +749,12 @@ def tpu_data_loader(itr):
 
 
 def is_xla_tensor(tensor):
+    """Is xla tensor."""
     return torch.is_tensor(tensor) and tensor.device.type == "xla"
 
 
 def index_put(tensor, indices, value):
+    """Index put."""
     if is_xla_tensor(tensor):
         for _ in range(indices.dim(), tensor.dim()):
             indices = indices.unsqueeze(-1)
@@ -746,6 +767,7 @@ def index_put(tensor, indices, value):
 
 
 def xla_device_to_cpu(dat):
+    """Xla device to cpu."""
     import torch_xla.core.xla_model as xm
 
     return xm._maybe_convert_to_cpu(dat)
@@ -753,6 +775,7 @@ def xla_device_to_cpu(dat):
 
 class CudaEnvironment(object):
     def __init__(self):
+        """Initialize the CudaEnvironment instance and configure its dependencies."""
         cur_device = torch.cuda.current_device()
         prop = torch.cuda.get_device_properties("cuda:{}".format(cur_device))
         self.name = prop.name
@@ -781,10 +804,12 @@ class CudaEnvironment(object):
 
 
 def csv_str_list(x):
+    """Csv str list."""
     return x.split(",")
 
 
 def eval_str_list(x, type=float):
+    """Eval str list."""
     if x is None:
         return None
     if isinstance(x, str):
@@ -796,6 +821,7 @@ def eval_str_list(x, type=float):
 
 
 def eval_str_dict(x, type=dict):
+    """Eval str dict."""
     if x is None:
         return None
     if isinstance(x, str):
@@ -804,6 +830,7 @@ def eval_str_dict(x, type=dict):
 
 
 def eval_bool(x, default=False):
+    """Eval bool."""
     if x is None:
         return default
     try:
@@ -813,6 +840,7 @@ def eval_bool(x, default=False):
 
 
 def reset_logging():
+    """Reset logging."""
     root = logging.getLogger()
     for handler in root.handlers:
         root.removeHandler(handler)
@@ -898,6 +926,7 @@ def hotreload_function(name=None):
     import traceback
 
     def hotreload_decorator(func):
+        """Hotreload decorator."""
         assert callable(func), f"not callable: {func}"
         jname = name or func.__name__
         logger.info(f"jurigged-hotreload:Apply jurigged on {jname}:{func.__name__}")
@@ -907,12 +936,13 @@ def hotreload_function(name=None):
         hot_reload_state = {"disable": False}
 
         def func_wrapper(*args, **kwargs):
+            """Func wrapper."""
             if not HOTRELOAD_PAUSE or hot_reload_state["disable"]:
                 return func(*args, **kwargs)
             world_size = distributed_utils.get_global_world_size()
-            assert (
-                world_size <= 1
-            ), f"HOTRELOAD_PAUSE:{jname} currently cannot do distributed training"
+            assert world_size <= 1, (
+                f"HOTRELOAD_PAUSE:{jname} currently cannot do distributed training"
+            )
             success = False
             while not success:
                 try:
@@ -925,9 +955,7 @@ def hotreload_function(name=None):
                     if end_action.strip().lower() in ["disable", "done"]:
                         success = True
                     else:
-                        logger.warning(
-                            f"{prefix}: action={end_action} function will re-run now."
-                        )
+                        logger.warning(f"{prefix}: action={end_action} function will re-run now.")
                 except Exception as e:
                     action = input(
                         f"{prefix}:ERROR: \n{traceback.format_exc()}\n"

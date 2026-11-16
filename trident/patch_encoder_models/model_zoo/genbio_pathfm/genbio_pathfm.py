@@ -31,7 +31,9 @@ from torch import Tensor
 # Shared helpers
 # ──────────────────────────────────────────────────────────────
 
+
 def _cat_keep_shapes(x_list: List[Tensor]) -> Tuple[Tensor, List[Tuple[int, ...]], List[int]]:
+    """Cat keep shapes."""
     shapes = [x.shape for x in x_list]
     num_tokens = [x.select(dim=-1, index=0).numel() for x in x_list]
     flattened = torch.cat([x.flatten(0, -2) for x in x_list])
@@ -43,6 +45,7 @@ def _uncat_with_shapes(
     shapes: List[Tuple[int, ...]],
     num_tokens: List[int],
 ) -> List[Tensor]:
+    """Uncat with shapes."""
     outputs_splitted = torch.split_with_sizes(flattened, num_tokens, dim=0)
     shapes_adjusted = [shape[:-1] + torch.Size([flattened.shape[-1]]) for shape in shapes]
     return [o.reshape(s) for o, s in zip(outputs_splitted, shapes_adjusted)]
@@ -52,6 +55,7 @@ def _uncat_with_shapes(
 # LayerScale
 # ──────────────────────────────────────────────────────────────
 
+
 class LayerScale(nn.Module):
     def __init__(
         self,
@@ -60,15 +64,18 @@ class LayerScale(nn.Module):
         inplace: bool = False,
         device=None,
     ) -> None:
+        """Initialize the LayerScale instance and configure its dependencies."""
         super().__init__()
         self.inplace = inplace
         self.gamma = nn.Parameter(torch.empty(dim, device=device))
         self.init_values = init_values
 
     def reset_parameters(self):
+        """Reset parameters."""
         nn.init.constant_(self.gamma, self.init_values)
 
     def forward(self, x: Tensor) -> Tensor:
+        """Compute the LayerScale forward pass for the supplied input tensors."""
         return x.mul_(self.gamma) if self.inplace else x * self.gamma
 
 
@@ -76,11 +83,14 @@ class LayerScale(nn.Module):
 # FFN layers  (Mlp  +  SwiGLUFFN)
 # ──────────────────────────────────────────────────────────────
 
+
 class _ListForwardMixin:
     def forward(self, x: Tensor) -> Tensor:
+        """Compute the _ListForwardMixin forward pass for the supplied input tensors."""
         raise NotImplementedError
 
     def forward_list(self, x_list: List[Tensor]) -> List[Tensor]:
+        """Forward list."""
         x_flat, shapes, num_tokens = _cat_keep_shapes(x_list)
         x_flat = self.forward(x_flat)
         return _uncat_with_shapes(x_flat, shapes, num_tokens)
@@ -97,6 +107,7 @@ class Mlp(nn.Module, _ListForwardMixin):
         bias: bool = True,
         device=None,
     ) -> None:
+        """Initialize the Mlp instance and configure its dependencies."""
         super().__init__()
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
@@ -106,6 +117,7 @@ class Mlp(nn.Module, _ListForwardMixin):
         self.drop = nn.Dropout(drop)
 
     def forward(self, x: Tensor) -> Tensor:
+        """Compute the Mlp forward pass for the supplied input tensors."""
         x = self.fc1(x)
         x = self.act(x)
         x = self.drop(x)
@@ -126,6 +138,7 @@ class SwiGLUFFN(nn.Module, _ListForwardMixin):
         align_to: int = 8,
         device=None,
     ) -> None:
+        """Initialize the SwiGLUFFN instance and configure its dependencies."""
         super().__init__()
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
@@ -136,6 +149,7 @@ class SwiGLUFFN(nn.Module, _ListForwardMixin):
         self.w3 = nn.Linear(h, out_features, bias=bias, device=device)
 
     def forward(self, x: Tensor) -> Tensor:
+        """Compute the SwiGLUFFN forward pass for the supplied input tensors."""
         return self.w3(F.silu(self.w1(x)) * self.w2(x))
 
 
@@ -143,7 +157,9 @@ class SwiGLUFFN(nn.Module, _ListForwardMixin):
 # PatchEmbed
 # ──────────────────────────────────────────────────────────────
 
+
 def _make_2tuple(x):
+    """Make 2tuple."""
     if isinstance(x, tuple):
         assert len(x) == 2
         return x
@@ -161,6 +177,7 @@ class PatchEmbed(nn.Module):
         norm_layer: Optional[Callable] = None,
         flatten_embedding: bool = True,
     ) -> None:
+        """Initialize the PatchEmbed instance and configure its dependencies."""
         super().__init__()
         image_HW = _make_2tuple(img_size)
         patch_HW = _make_2tuple(patch_size)
@@ -178,6 +195,7 @@ class PatchEmbed(nn.Module):
         self.norm = norm_layer(embed_dim) if norm_layer else nn.Identity()
 
     def forward(self, x: Tensor) -> Tensor:
+        """Compute the PatchEmbed forward pass for the supplied input tensors."""
         x = self.proj(x)
         H, W = x.size(2), x.size(3)
         x = x.flatten(2).transpose(1, 2)
@@ -187,6 +205,7 @@ class PatchEmbed(nn.Module):
         return x
 
     def reset_parameters(self):
+        """Reset parameters."""
         k = 1 / (self.in_chans * (self.patch_size[0] ** 2))
         nn.init.uniform_(self.proj.weight, -math.sqrt(k), math.sqrt(k))
         if self.proj.bias is not None:
@@ -196,6 +215,7 @@ class PatchEmbed(nn.Module):
 # ──────────────────────────────────────────────────────────────
 # RoPE position encoding
 # ──────────────────────────────────────────────────────────────
+
 
 class RopePositionEmbedding(nn.Module):
     def __init__(
@@ -213,6 +233,7 @@ class RopePositionEmbedding(nn.Module):
         dtype: Optional[torch.dtype] = None,
         device=None,
     ):
+        """Initialize the RopePositionEmbedding instance and configure its dependencies."""
         super().__init__()
         assert embed_dim % (4 * num_heads) == 0
         both_periods = min_period is not None and max_period is not None
@@ -238,6 +259,7 @@ class RopePositionEmbedding(nn.Module):
         self._init_weights()
 
     def _init_weights(self):
+        """Init weights."""
         device = self.periods.device
         dtype = self.dtype
         if self.base is not None:
@@ -247,10 +269,11 @@ class RopePositionEmbedding(nn.Module):
         else:
             base = self.max_period / self.min_period
             exponents = torch.linspace(0, 1, self.D_head // 4, device=device, dtype=dtype)
-            periods = (base ** exponents) / base * self.max_period
+            periods = (base**exponents) / base * self.max_period
         self.periods.data = periods
 
     def forward(self, *, H: int, W: int) -> Tuple[Tensor, Tensor]:
+        """Compute the RopePositionEmbedding forward pass for the supplied input tensors."""
         device, dtype = self.periods.device, self.dtype
         dd = {"device": device, "dtype": dtype}
 
@@ -267,8 +290,8 @@ class RopePositionEmbedding(nn.Module):
             coords_w = torch.arange(0.5, W, **dd) / W
 
         coords = torch.stack(torch.meshgrid(coords_h, coords_w, indexing="ij"), dim=-1)  # [H,W,2]
-        coords = coords.flatten(0, 1)        # [HW, 2]
-        coords = 2.0 * coords - 1.0         # shift to [-1, +1]
+        coords = coords.flatten(0, 1)  # [HW, 2]
+        coords = 2.0 * coords - 1.0  # shift to [-1, +1]
 
         if self.training and self.shift_coords is not None:
             coords += torch.empty(2, **dd).uniform_(-self.shift_coords, self.shift_coords)
@@ -280,7 +303,7 @@ class RopePositionEmbedding(nn.Module):
             coords *= torch.empty(1, **dd).uniform_(-rmax, rmax).exp()
 
         angles = 2 * math.pi * coords[:, :, None] / self.periods[None, None, :]  # [HW,2,D//4]
-        angles = angles.flatten(1, 2).tile(2)                                     # [HW, D]
+        angles = angles.flatten(1, 2).tile(2)  # [HW, D]
         return torch.sin(angles), torch.cos(angles)
 
 
@@ -288,12 +311,15 @@ class RopePositionEmbedding(nn.Module):
 # Self-Attention
 # ──────────────────────────────────────────────────────────────
 
+
 def _rope_rotate_half(x: Tensor) -> Tensor:
+    """Rope rotate half."""
     x1, x2 = x.chunk(2, dim=-1)
     return torch.cat([-x2, x1], dim=-1)
 
 
 def _rope_apply(x: Tensor, sin: Tensor, cos: Tensor) -> Tensor:
+    """Rope apply."""
     return (x * cos) + (_rope_rotate_half(x) * sin)
 
 
@@ -308,6 +334,7 @@ class SelfAttention(nn.Module):
         proj_drop: float = 0.0,
         device=None,
     ) -> None:
+        """Initialize the SelfAttention instance and configure its dependencies."""
         super().__init__()
         self.num_heads = num_heads
         self.scale = (dim // num_heads) ** -0.5
@@ -319,6 +346,7 @@ class SelfAttention(nn.Module):
     def _apply_rope(
         self, q: Tensor, k: Tensor, rope: Tuple[Tensor, Tensor]
     ) -> Tuple[Tensor, Tensor]:
+        """Apply rope."""
         q_dtype, k_dtype = q.dtype, k.dtype
         sin, cos = rope
         q = q.to(sin.dtype)
@@ -330,6 +358,7 @@ class SelfAttention(nn.Module):
         return q.to(q_dtype), k.to(k_dtype)
 
     def compute_attention(self, qkv: Tensor, attn_bias=None, rope=None) -> Tensor:
+        """Compute attention."""
         assert attn_bias is None
         B, N, _ = qkv.shape
         C = self.qkv.in_features
@@ -341,10 +370,12 @@ class SelfAttention(nn.Module):
         return x.transpose(1, 2).reshape(B, N, C)
 
     def forward(self, x: Tensor, attn_bias=None, rope=None) -> Tensor:
+        """Compute the SelfAttention forward pass for the supplied input tensors."""
         x = self.proj(self.compute_attention(self.qkv(x), attn_bias=attn_bias, rope=rope))
         return self.proj_drop(x)
 
     def forward_list(self, x_list: List[Tensor], attn_bias=None, rope_list=None) -> List[Tensor]:
+        """Forward list."""
         x_flat, shapes, num_tokens = _cat_keep_shapes(x_list)
         qkv_flat = self.qkv(x_flat)
         qkv_list = _uncat_with_shapes(qkv_flat, shapes, num_tokens)
@@ -383,23 +414,42 @@ class SelfAttentionBlock(nn.Module):
         ffn_layer: Callable[..., nn.Module] = Mlp,
         device=None,
     ) -> None:
+        """Initialize the SelfAttentionBlock instance and configure its dependencies."""
         super().__init__()
         self.norm1 = norm_layer(dim)
         self.attn = attn_class(
-            dim, num_heads=num_heads, qkv_bias=qkv_bias, proj_bias=proj_bias,
-            attn_drop=attn_drop, proj_drop=drop, device=device,
+            dim,
+            num_heads=num_heads,
+            qkv_bias=qkv_bias,
+            proj_bias=proj_bias,
+            attn_drop=attn_drop,
+            proj_drop=drop,
+            device=device,
         )
-        self.ls1 = LayerScale(dim, init_values=init_values, device=device) if init_values else nn.Identity()
+        self.ls1 = (
+            LayerScale(dim, init_values=init_values, device=device)
+            if init_values
+            else nn.Identity()
+        )
         self.norm2 = norm_layer(dim)
         self.mlp = ffn_layer(
-            in_features=dim, hidden_features=int(dim * ffn_ratio),
-            act_layer=act_layer, drop=drop, bias=ffn_bias, device=device,
+            in_features=dim,
+            hidden_features=int(dim * ffn_ratio),
+            act_layer=act_layer,
+            drop=drop,
+            bias=ffn_bias,
+            device=device,
         )
-        self.ls2 = LayerScale(dim, init_values=init_values, device=device) if init_values else nn.Identity()
+        self.ls2 = (
+            LayerScale(dim, init_values=init_values, device=device)
+            if init_values
+            else nn.Identity()
+        )
         self.sample_drop_ratio = drop_path
 
     @staticmethod
     def _maybe_index_rope(rope, indices):
+        """Maybe index rope."""
         if rope is None:
             return None
         sin, cos = rope
@@ -408,6 +458,7 @@ class SelfAttentionBlock(nn.Module):
         return sin, cos
 
     def _forward_list(self, x_list: List[Tensor], rope_list=None) -> List[Tensor]:
+        """Forward list."""
         if self.training and self.sample_drop_ratio > 0.0:
             b_list = [x.shape[0] for x in x_list]
             ss = [max(int(b * (1 - self.sample_drop_ratio)), 1) for b in b_list]
@@ -415,7 +466,11 @@ class SelfAttentionBlock(nn.Module):
 
             idx1 = [(torch.randperm(b, device=x.device))[:s] for x, b, s in zip(x_list, b_list, ss)]
             sub1 = [x[i] for x, i in zip(x_list, idx1)]
-            rope_sub = [self._maybe_index_rope(r, i) for r, i in zip(rope_list, idx1)] if rope_list else rope_list
+            rope_sub = (
+                [self._maybe_index_rope(r, i) for r, i in zip(rope_list, idx1)]
+                if rope_list
+                else rope_list
+            )
 
             flat, shapes, nt = _cat_keep_shapes(sub1)
             norm1 = _uncat_with_shapes(self.norm1(flat), shapes, nt)
@@ -443,6 +498,7 @@ class SelfAttentionBlock(nn.Module):
             return out
 
     def forward(self, x_or_list, rope_or_list=None):
+        """Compute the SelfAttentionBlock forward pass for the supplied input tensors."""
         if isinstance(x_or_list, Tensor):
             return self._forward_list([x_or_list], rope_list=[rope_or_list])[0]
         elif isinstance(x_or_list, list):
@@ -504,6 +560,7 @@ class VisionTransformer(nn.Module):
         device=None,
         **ignored_kwargs,
     ):
+        """Initialize the VisionTransformer instance and configure its dependencies."""
         super().__init__()
         norm_layer_cls = _NORM_LAYERS[norm_layer]
         ffn_layer_cls = _FFN_LAYERS[ffn_layer]
@@ -515,15 +572,21 @@ class VisionTransformer(nn.Module):
         self.n_storage_tokens = n_storage_tokens
 
         self.patch_embed = PatchEmbed(
-            img_size=img_size, patch_size=patch_size,
-            in_chans=in_chans, embed_dim=embed_dim, flatten_embedding=False,
+            img_size=img_size,
+            patch_size=patch_size,
+            in_chans=in_chans,
+            embed_dim=embed_dim,
+            flatten_embedding=False,
         )
         self.cls_token = nn.Parameter(torch.empty(1, 1, embed_dim, device=device))
         if n_storage_tokens > 0:
-            self.storage_tokens = nn.Parameter(torch.empty(1, n_storage_tokens, embed_dim, device=device))
+            self.storage_tokens = nn.Parameter(
+                torch.empty(1, n_storage_tokens, embed_dim, device=device)
+            )
 
         self.rope_embed = RopePositionEmbedding(
-            embed_dim=embed_dim, num_heads=num_heads,
+            embed_dim=embed_dim,
+            num_heads=num_heads,
             base=pos_embed_rope_base,
             min_period=pos_embed_rope_min_period,
             max_period=pos_embed_rope_max_period,
@@ -535,30 +598,43 @@ class VisionTransformer(nn.Module):
             device=device,
         )
 
-        self.blocks = nn.ModuleList([
-            SelfAttentionBlock(
-                dim=embed_dim, num_heads=num_heads, ffn_ratio=ffn_ratio,
-                qkv_bias=qkv_bias, proj_bias=proj_bias, ffn_bias=ffn_bias,
-                drop_path=drop_path_rate, norm_layer=norm_layer_cls,
-                act_layer=nn.GELU, ffn_layer=ffn_layer_cls,
-                init_values=layerscale_init, device=device,
-            )
-            for _ in range(depth)
-        ])
+        self.blocks = nn.ModuleList(
+            [
+                SelfAttentionBlock(
+                    dim=embed_dim,
+                    num_heads=num_heads,
+                    ffn_ratio=ffn_ratio,
+                    qkv_bias=qkv_bias,
+                    proj_bias=proj_bias,
+                    ffn_bias=ffn_bias,
+                    drop_path=drop_path_rate,
+                    norm_layer=norm_layer_cls,
+                    act_layer=nn.GELU,
+                    ffn_layer=ffn_layer_cls,
+                    init_values=layerscale_init,
+                    device=device,
+                )
+                for _ in range(depth)
+            ]
+        )
         self.norm = norm_layer_cls(embed_dim)
 
     def prepare_tokens(self, x: Tensor) -> Tuple[Tensor, Tuple[int, int]]:
+        """Prepare tokens."""
         x = self.patch_embed(x)
         B, H, W, _ = x.shape
         x = x.flatten(1, 2)
         ct = self.cls_token
-        st = self.storage_tokens if self.n_storage_tokens > 0 else torch.empty(
-            1, 0, ct.shape[-1], dtype=ct.dtype, device=ct.device
+        st = (
+            self.storage_tokens
+            if self.n_storage_tokens > 0
+            else torch.empty(1, 0, ct.shape[-1], dtype=ct.dtype, device=ct.device)
         )
         x = torch.cat([ct.expand(B, -1, -1), st.expand(B, -1, -1), x], dim=1)
         return x, (H, W)
 
     def forward_features(self, x: Tensor) -> Dict[str, Tensor]:
+        """Forward features."""
         tokens, (H, W) = self.prepare_tokens(x)
         rope = self.rope_embed(H=H, W=W)
         for blk in self.blocks:
@@ -566,13 +642,14 @@ class VisionTransformer(nn.Module):
         tokens = self.norm(tokens)
         n = self.n_storage_tokens
         return {
-            "x_norm_clstoken":    tokens[:, 0],
-            "x_storage_tokens":   tokens[:, 1:n + 1],
-            "x_norm_patchtokens": tokens[:, n + 1:],
-            "x_prenorm":          tokens,
+            "x_norm_clstoken": tokens[:, 0],
+            "x_storage_tokens": tokens[:, 1 : n + 1],
+            "x_norm_patchtokens": tokens[:, n + 1 :],
+            "x_prenorm": tokens,
         }
 
     def forward(self, x: Tensor) -> Dict[str, Tensor]:
+        """Compute the VisionTransformer forward pass for the supplied input tensors."""
         return self.forward_features(x)
 
 
@@ -580,12 +657,13 @@ class VisionTransformer(nn.Module):
 # GenBioPathFMInference
 # ──────────────────────────────────────────────────────────────
 
+
 class GenBioPathFMInference(nn.Module):
     """
     Loads a GenBio-PathFM checkpoint and runs RGB inference.
 
     ``forward`` returns a *single* tensor – the concatenated
-    CLS token across R/G/B channels.  
+    CLS token across R/G/B channels.
     Use ``forward_with_patches`` when you also need patch tokens.
 
     Args:
@@ -594,9 +672,9 @@ class GenBioPathFMInference(nn.Module):
     """
 
     def __init__(self, weights_path: str, device: str = "cuda"):
+        """Initialize the GenBioPathFMInference instance and configure its dependencies."""
         super().__init__()
         self.device = torch.device(device)
-
 
         self.model = VisionTransformer(
             img_size=224,
@@ -630,7 +708,7 @@ class GenBioPathFMInference(nn.Module):
         tokens = self.model.norm(tokens)
         n_storage_tokens = self.model.n_storage_tokens
         return {
-            "x_norm_clstoken":    tokens[:, 0],
+            "x_norm_clstoken": tokens[:, 0],
             "x_norm_patchtokens": tokens[:, n_storage_tokens + 1 :],
         }
 
@@ -651,12 +729,10 @@ class GenBioPathFMInference(nn.Module):
         # Stack all channels into a single-channel batch → [B*3, 1, H, W]
         features = self._encode(x_rgb.reshape(b * 3, 1, h, w))
 
-        cls = features["x_norm_clstoken"].view(b, 3, -1)            # [B, 3, D]
-        return torch.cat([cls[:, 0], cls[:, 1], cls[:, 2]], dim=-1) # [B, 3*D]
+        cls = features["x_norm_clstoken"].view(b, 3, -1)  # [B, 3, D]
+        return torch.cat([cls[:, 0], cls[:, 1], cls[:, 2]], dim=-1)  # [B, 3*D]
 
-    def forward_with_patches(
-        self, x_rgb: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward_with_patches(self, x_rgb: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Extended forward that also returns patch-level features.
 
@@ -673,7 +749,7 @@ class GenBioPathFMInference(nn.Module):
         cls = features["x_norm_clstoken"].view(b, 3, -1)
         cls_out = torch.cat([cls[:, 0], cls[:, 1], cls[:, 2]], dim=-1)
 
-        patches = features["x_norm_patchtokens"]                     # [B*3, N, D]
+        patches = features["x_norm_patchtokens"]  # [B*3, N, D]
         n, d = patches.shape[1], patches.shape[2]
         patches = patches.view(b, 3, n, d)
         patch_out = torch.cat([patches[:, 0], patches[:, 1], patches[:, 2]], dim=-1)

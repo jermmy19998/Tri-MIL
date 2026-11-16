@@ -1,6 +1,7 @@
 """
 MSM_MIL - Multi-Scale Mamba-based Multiple Instance Learning
 """
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -11,6 +12,7 @@ try:
         from mamba.mamba_ssm.modules.srmamba import SRMamba
         from mamba.mamba_ssm.modules.bimamba import BiMamba
         from mamba.mamba_ssm.modules.mamba_simple import Mamba
+
         # MultiMamba might be in a different location
         try:
             from mamba.mamba_ssm.modules.multimamba import MultiMamba
@@ -21,6 +23,7 @@ try:
         # Fallback to standard mamba-ssm package
         try:
             from mamba_ssm.modules.mamba_simple import Mamba
+
             # For SRMamba, BiMamba, MultiMamba, we may need to implement them or use Mamba
             SRMamba = BiMamba = MultiMamba = Mamba
         except ImportError:
@@ -30,7 +33,9 @@ except ImportError as e:
     print("Please ensure mamba-ssm is installed or the local mamba package is available")
     SRMamba = BiMamba = Mamba = MultiMamba = None
 
+
 def initialize_weights(module):
+    """Initialize weights."""
     for m in module.modules():
         if isinstance(m, nn.Linear):
             nn.init.xavier_normal_(m.weight)
@@ -40,27 +45,39 @@ def initialize_weights(module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
+
 class MSM_MIL(nn.Module):
     """
     Multi-Scale Mamba-based Multiple Instance Learning
     Reference: MSMMIL paper
     """
-    def __init__(self, in_dim=1024, num_classes=2, dropout=0.1, act=nn.ReLU(), 
-                 layer=2, rate=10, mamba_type="SRMamba", **kwargs):
+
+    def __init__(
+        self,
+        in_dim=1024,
+        num_classes=2,
+        dropout=0.1,
+        act=nn.ReLU(),
+        layer=2,
+        rate=10,
+        mamba_type="SRMamba",
+        **kwargs,
+    ):
+        """Initialize the MSM_MIL instance and configure its dependencies."""
         super(MSM_MIL, self).__init__()
-        
+
         # Convert act to string for compatibility
         if isinstance(act, nn.ReLU):
-            act_str = 'relu'
+            act_str = "relu"
         elif isinstance(act, nn.GELU):
-            act_str = 'gelu'
+            act_str = "gelu"
         else:
-            act_str = 'relu'
-        
+            act_str = "relu"
+
         self._fc1 = [nn.Linear(in_dim, 512)]
-        if act_str.lower() == 'relu':
+        if act_str.lower() == "relu":
             self._fc1 += [nn.ReLU()]
-        elif act_str.lower() == 'gelu':
+        elif act_str.lower() == "gelu":
             self._fc1 += [nn.GELU()]
         if dropout:
             self._fc1 += [nn.Dropout(dropout)]
@@ -131,23 +148,19 @@ class MSM_MIL(nn.Module):
 
         self.num_classes = num_classes
         self.classifier = nn.Linear(512, self.num_classes)
-        self.attention = nn.Sequential(
-            nn.Linear(512, 128),
-            nn.Tanh(),
-            nn.Linear(128, 1)
-        )
+        self.attention = nn.Sequential(nn.Linear(512, 128), nn.Tanh(), nn.Linear(128, 1))
 
         self.apply(initialize_weights)
 
     def forward(self, x, return_WSI_attn=False, return_WSI_feature=False):
-        
+        """Compute the MSM_MIL forward pass for the supplied input tensors."""
         forward_return = {}
-        
+
         # Handle input format
         if len(x.shape) == 2:
             x = x.unsqueeze(0)  # (N, D) -> (1, N, D)
         h = x.float()  # [B, n, in_dim]
-        
+
         h = self._fc1(h)  # [B, n, 512]
 
         # Apply Mamba layers
@@ -178,11 +191,11 @@ class MSM_MIL(nn.Module):
         h = h.squeeze(0)  # [1, 512]
 
         logits = self.classifier(h)  # [1, num_classes]
-        
-        forward_return['logits'] = logits
+
+        forward_return["logits"] = logits
         if return_WSI_feature:
-            forward_return['WSI_feature'] = h
+            forward_return["WSI_feature"] = h
         if return_WSI_attn:
-            forward_return['WSI_attn'] = A_ori.squeeze(0).squeeze(-1)  # [n]
-        
+            forward_return["WSI_attn"] = A_ori.squeeze(0).squeeze(-1)  # [n]
+
         return forward_return

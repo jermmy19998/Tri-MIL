@@ -6,6 +6,7 @@ import torch.nn.functional as F
 
 
 def initialize_weights(module):
+    """Initialize weights."""
     for m in module.modules():
         if isinstance(m, nn.Linear):
             nn.init.xavier_normal_(m.weight)
@@ -32,12 +33,13 @@ class DAG_MIL(nn.Module):
         dim_hidden=512,
         topk=6,
         stride=512,
-        agg_type='bi-interaction',
+        agg_type="bi-interaction",
         dropout=0.3,
         max_instances=None,
-        sampling='uniform',
-        eval_sampling='uniform',
+        sampling="uniform",
+        eval_sampling="uniform",
     ):
+        """Initialize the DAG_MIL instance and configure its dependencies."""
         super().__init__()
         self.in_dim = in_dim
         self.topk = topk
@@ -57,10 +59,10 @@ class DAG_MIL(nn.Module):
             nn.Sigmoid(),
         )
 
-        if agg_type == 'gcn':
+        if agg_type == "gcn":
             self.linear1 = nn.Linear(dim_hidden, dim_hidden)
             self.linear2 = None
-        elif agg_type == 'bi-interaction':
+        elif agg_type == "bi-interaction":
             self.linear1 = nn.Linear(dim_hidden, dim_hidden)
             self.linear2 = nn.Linear(dim_hidden, dim_hidden)
         else:
@@ -80,12 +82,14 @@ class DAG_MIL(nn.Module):
         self.apply(initialize_weights)
 
     def _pseudo_coords(self, n, device, dtype):
+        """Pseudo coords."""
         side = int(math.ceil(math.sqrt(n)))
         y = torch.arange(side, device=device, dtype=dtype).repeat_interleave(side)
         x = torch.arange(side, device=device, dtype=dtype).repeat(side)
         return torch.stack([x, y], dim=-1)[:n]
 
     def _split_features_coords(self, x, coords=None):
+        """Split features coords."""
         if x.dim() == 2:
             x = x.unsqueeze(0)
         if coords is not None:
@@ -93,27 +97,33 @@ class DAG_MIL(nn.Module):
                 coords = coords.unsqueeze(0)
             return x[..., : self.in_dim], coords.float()
         if x.shape[-1] == self.in_dim + 2:
-            return x[..., : self.in_dim], x[..., self.in_dim:self.in_dim + 2].float()
-        coords = self._pseudo_coords(x.shape[1], x.device, x.dtype).unsqueeze(0).expand(x.shape[0], -1, -1)
+            return x[..., : self.in_dim], x[..., self.in_dim : self.in_dim + 2].float()
+        coords = (
+            self._pseudo_coords(x.shape[1], x.device, x.dtype)
+            .unsqueeze(0)
+            .expand(x.shape[0], -1, -1)
+        )
         return x[..., : self.in_dim], coords
 
     def _sample_instances(self, x, coords):
+        """Sample instances."""
         n = x.shape[1]
         if self.max_instances in [None, 0] or n <= self.max_instances:
             return x, coords, None, n
 
         mode = self.sampling if self.training else self.eval_sampling
-        if mode == 'random':
+        if mode == "random":
             idx = torch.randperm(n, device=x.device)[: self.max_instances].sort().values
-        elif mode == 'head':
+        elif mode == "head":
             idx = torch.arange(self.max_instances, device=x.device)
-        elif mode == 'uniform':
+        elif mode == "uniform":
             idx = torch.linspace(0, n - 1, self.max_instances, device=x.device).long()
         else:
             raise ValueError("sampling/eval_sampling must be one of: uniform, random, head")
         return x.index_select(1, idx), coords.index_select(1, idx), idx, n
 
     def forward(self, x, coords=None, return_WSI_attn=False, return_WSI_feature=False):
+        """Compute the DAG_MIL forward pass for the supplied input tensors."""
         forward_return = {}
         x, coords = self._split_features_coords(x, coords)
         x, coords, sampled_idx, original_n = self._sample_instances(x.float(), coords.float())
@@ -140,11 +150,11 @@ class DAG_MIL(nn.Module):
 
         weighted_nb = edge_weight.unsqueeze(-1) * nb_h
         gate = torch.tanh(h_expand + weighted_nb)
-        ka_weight = torch.einsum('bnkd,bnkd->bnk', nb_h, gate)
+        ka_weight = torch.einsum("bnkd,bnkd->bnk", nb_h, gate)
         ka_prob = F.softmax(ka_weight, dim=-1).unsqueeze(2)
         e_nh = torch.matmul(ka_prob, nb_h).squeeze(2)
 
-        if self.agg_type == 'gcn':
+        if self.agg_type == "gcn":
             embedding = self.activation(self.linear1(e_h + e_nh))
         else:
             sum_embedding = self.activation(self.linear1(e_h + e_nh))
@@ -158,13 +168,17 @@ class DAG_MIL(nn.Module):
         wsi_feature = self.norm(wsi_feature)
         logits = self.classifier(wsi_feature)
 
-        forward_return['logits'] = logits
+        forward_return["logits"] = logits
         if return_WSI_feature:
-            forward_return['WSI_feature'] = wsi_feature
+            forward_return["WSI_feature"] = wsi_feature
         if return_WSI_attn:
             if sampled_idx is not None:
-                full_attn = torch.zeros(attn.shape[0], original_n, device=attn.device, dtype=attn.dtype)
+                full_attn = torch.zeros(
+                    attn.shape[0], original_n, device=attn.device, dtype=attn.dtype
+                )
                 full_attn.index_copy_(1, sampled_idx, attn)
                 attn = full_attn
-            forward_return['WSI_attn'] = attn.squeeze(0).unsqueeze(-1) if attn.shape[0] == 1 else attn.unsqueeze(-1)
+            forward_return["WSI_attn"] = (
+                attn.squeeze(0).unsqueeze(-1) if attn.shape[0] == 1 else attn.unsqueeze(-1)
+            )
         return forward_return

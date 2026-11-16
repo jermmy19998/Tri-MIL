@@ -6,18 +6,25 @@ from .logarithm import LogTensor
 from .utils import delta, split
 
 
-def Top1_Hard_SVM(labels, alpha=1.):
+def Top1_Hard_SVM(labels, alpha=1.0):
+    """Top1  Hard SVM."""
+
     def fun(x, y):
         # max oracle
+        """Fun."""
         max_, _ = (x + delta(y, labels, alpha)).max(1)
         # subtract ground truth
         loss = max_ - x.gather(1, y[:, None]).squeeze()
         return loss
+
     return fun
 
 
-def Topk_Hard_SVM(labels, k, alpha=1.):
+def Topk_Hard_SVM(labels, k, alpha=1.0):
+    """Topk  Hard SVM."""
+
     def fun(x, y):
+        """Fun."""
         x_1, x_2 = split(x, y, labels)
 
         max_1, _ = (x_1 + alpha).topk(k, dim=1)
@@ -29,25 +36,31 @@ def Topk_Hard_SVM(labels, k, alpha=1.):
         loss = torch.clamp(max_1 - max_2, min=0)
 
         return loss
+
     return fun
 
 
-def Top1_Smooth_SVM(labels, tau, alpha=1.):
+def Top1_Smooth_SVM(labels, tau, alpha=1.0):
+    """Top1  Smooth SVM."""
+
     def fun(x, y):
         # add loss term and subtract ground truth score
+        """Fun."""
         x = x + delta(y, labels, alpha) - x.gather(1, y[:, None])
         # compute loss
         loss = tau * log_sum_exp(x / tau)
 
         return loss
+
     return fun
 
 
-def Topk_Smooth_SVM(labels, k, tau, alpha=1.):
-
+def Topk_Smooth_SVM(labels, k, tau, alpha=1.0):
+    """Topk  Smooth SVM."""
     lsp = LogSumExp(k)
 
     def fun(x, y):
+        """Fun."""
         x_1, x_2 = split(x, y, labels)
         # all scores are divided by (k * tau)
         x_1.div_(k * tau)
@@ -69,4 +82,5 @@ def Topk_Smooth_SVM(labels, k, tau, alpha=1.):
         loss = tau * (loss_pos - loss_neg)
 
         return loss
+
     return fun

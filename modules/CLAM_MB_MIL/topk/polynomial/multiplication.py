@@ -13,16 +13,17 @@ def Multiplication(k):
     assert isinstance(k, int) and k > 0
 
     def isum(factors):
+        """Isum."""
         init = next(factors)
         return reduce(operator.iadd, factors, init)
 
     def mul_function(x1, x2):
-
         # prepare indices for convolution
+        """Mul function."""
         l1, l2 = len(x1), len(x2)
         M = min(k + 1, l1 + l2 - 1)
         indices = [[] for _ in range(M)]
-        for (i, j) in itertools.product(range(l1), range(l2)):
+        for i, j in itertools.product(range(l1), range(l2)):
             if i + j >= M:
                 continue
             indices[i + j].append((i, j))

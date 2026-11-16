@@ -19,6 +19,57 @@ Tri-MIL 将两部分能力整合到同一套工作流中：
 
 目标不是把两个仓库简单拼接，而是把从原始切片到特征、再到 MIL 实验和推理的流程打通。
 
+## 0.4.0 更新
+
+- 新增 8 个 MIL 模型：`AS_MIL`、`ATTRI_MIL`、`CAR_MIL`、`FC_MIL`、
+  `LIN_MIL`、`MR_AB_MIL`、`NN_MIL`、`PNEA_MIL`，包含 YAML、模型工厂和训练流程。
+- 同步 TRIDENT 0.3.2：可配置编码器输入尺寸，新增 GigaPath Flash、Virchow2 CLS、
+  Phaet、Mascaret 编码器，更新 BioIO 转换、WSI 读取、处理及状态记录；保留原有 ViT-S。
+- 新增生存预测：Cox 损失、右删失处理、验证集 C-index 选模，以及无标签风险推理。
+- 接入 `split_by_case/` 病例级划分；为 Python 函数补齐 docstring，统一格式并加入回归测试。
+
+同步依据是 2026-11-16 提供的本地源码快照。详见[更新日志](./CHANGELOG.md)、
+[上游输入哈希](./docs/upstream-sync.json)及[生存预测完整说明](./docs/survival.md)。
+
+### 生存预测快速开始
+
+先准备包含 `slide_path,time,event,case_id` 的清单。`time` 是随访时间，
+`event=1` 表示已观察到事件，`event=0` 表示右删失；特征支持 PT/HDF5。
+病例级划分会把同一患者的切片放在同一组，避免数据泄漏：
+
+```bash
+python prepare_survival_csv.py --manifest ./datasets/survival_manifest.csv --output ./datasets/survival_splits.csv
+# 先修改两个 SURVIVAL YAML 中的特征维度和路径。
+python train_mil.py --yaml_path ./configs/SURVIVAL_PIPELINE.yaml
+python valid_mil.py --yaml_path ./configs/SURVIVAL_PIPELINE.yaml
+python infer_mil.py --yaml_path ./configs/SURVIVAL_PIPELINE.yaml
+```
+
+配置示例：[SURVIVAL_AB_MIL.yaml](./configs/SURVIVAL_AB_MIL.yaml) 和
+[SURVIVAL_PIPELINE.yaml](./configs/SURVIVAL_PIPELINE.yaml)。划分 CSV 使用
+`train_slide_path,train_time,train_event` 及对应的 `val_`、`test_` 列；推理只需路径列。
+输出 `risk` 越大表示预测风险越高，它不是生存时间或生存概率。
+
+C-index 对并列风险记 0.5 分，无可比较样本时输出 JSON `null`。训练使用精确的全队列
+Cox 风险集，反向传播前保留所有训练 bag 的计算图，显存占用随队列规模增长。
+患者级生存预测建议每位患者一个特征 bag；专用多阶段或坐标模型需要额外适配，
+支持范围、删失约定及输出字段见完整说明。
+
+### 开发验证
+
+支持 Python 3.10–3.12。以下核心测试无需下载预训练权重：
+
+```bash
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+pip install -r requirements-test.txt
+python -m pytest -q
+python tools/document_functions.py
+ruff check .
+ruff format --check .
+```
+
+完整 WSI 和预训练编码器验证还需要原生读取依赖、模型权重及真实切片数据。
+
 ## 一眼看懂
 
 | 模块 | 作用 | 主要路径 |
@@ -82,12 +133,12 @@ pip install -e .
 
 Tri-MIL 现在支持一份统一 pipeline YAML，同时驱动 `train_mil.py`、`valid_mil.py`、`infer_mil.py` 和 `draw_heatmap.py`。
 
-可以直接使用 [configs/TRI_MIL_PIPELINE.yaml](D:/Desktop/Tri-MIL/configs/TRI_MIL_PIPELINE.yaml)：
+可以直接使用 [configs/TRI_MIL_PIPELINE.yaml](./configs/TRI_MIL_PIPELINE.yaml)：
 
 ```bash
 python train_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
 python valid_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
-python infer_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml --no_label
+python infer_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
 python draw_heatmap.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
 ```
 
@@ -184,7 +235,7 @@ python valid_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
 无标签推理：
 
 ```bash
-python infer_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml --no_label
+python infer_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
 ```
 
 ## 仓库结构

@@ -1,4 +1,7 @@
 __pycache__/
+.venv/
+.ruff_cache/
+artifacts/
 *.py[cod]
 *$py.class
 *.so

@@ -7,4 +7,3 @@ __all__ = [
     "apply_otsu_thresholding",
     "mask_rgb",
 ]
-

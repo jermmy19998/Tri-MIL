@@ -7,15 +7,16 @@ from einops import repeat
 from .nystrom_attention import NystromAttention
 from .emb_position import *
 
+
 def pos_enc_1d(D, len_seq):
-    
+    """Pos enc 1d."""
     if D % 2 != 0:
-        raise ValueError("Cannot use sin/cos positional encoding with "
-                         "odd dim (got dim={:d})".format(D))
+        raise ValueError(
+            "Cannot use sin/cos positional encoding with odd dim (got dim={:d})".format(D)
+        )
     pe = torch.zeros(len_seq, D)
     position = torch.arange(0, len_seq).unsqueeze(1)
-    div_term = torch.exp((torch.arange(0, D, 2, dtype=torch.float) *
-                         -(math.log(10000.0) / D)))
+    div_term = torch.exp((torch.arange(0, D, 2, dtype=torch.float) * -(math.log(10000.0) / D)))
     pe[:, 0::2] = torch.sin(position.float() * div_term)
     pe[:, 1::2] = torch.cos(position.float() * div_term)
 
@@ -24,34 +25,43 @@ def pos_enc_1d(D, len_seq):
 
 class MLP(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, dropout_rate):
+        """Initialize the MLP instance and configure its dependencies."""
         super(MLP, self).__init__()
         self.fc1 = nn.Linear(input_dim, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, output_dim)
         self.dropout = nn.Dropout(dropout_rate)
 
     def forward(self, x):
+        """Compute the MLP forward pass for the supplied input tensors."""
         x = self.fc1(x)
         x = torch.relu(x)
         x = self.dropout(x)
         x = self.fc2(x)
         return x
 
+
 class MLP_single_layer(nn.Module):
     def __init__(self, input_dim, output_dim):
+        """Initialize the MLP_single_layer instance and configure its dependencies."""
         super(MLP_single_layer, self).__init__()
         self.fc = nn.Linear(input_dim, output_dim)
 
     def forward(self, x):
+        """Compute the MLP_single_layer forward pass for the supplied input tensors."""
         x = self.fc(x)
         return x
 
+
 class AC_MIL(nn.Module):
-    def __init__(self, in_dim, hidden_dim, num_classes,n_token=1, n_masked_patch=0, mask_drop=0):
+    def __init__(self, in_dim, hidden_dim, num_classes, n_token=1, n_masked_patch=0, mask_drop=0):
+        """Initialize the AC_MIL instance and configure its dependencies."""
         super(AC_MIL, self).__init__()
-        self.dimreduction = DimReduction(in_dim , hidden_dim)
+        self.dimreduction = DimReduction(in_dim, hidden_dim)
         self.sub_attention = nn.ModuleList()
         for i in range(n_token):
-            self.sub_attention.append(MutiHeadAttention(hidden_dim, 8, n_masked_patch=n_masked_patch, mask_drop=mask_drop))
+            self.sub_attention.append(
+                MutiHeadAttention(hidden_dim, 8, n_masked_patch=n_masked_patch, mask_drop=mask_drop)
+            )
         self.bag_attention = MutiHeadAttention_modify(hidden_dim, 8)
         self.q = nn.Parameter(torch.zeros((1, n_token, hidden_dim)))
         nn.init.normal_(self.q, std=1e-6)
@@ -62,7 +72,8 @@ class AC_MIL(nn.Module):
         self.n_token = n_token
         self.Slide_classifier = Classifier_1fc(hidden_dim, num_classes, 0.0)
 
-    def forward(self, x, return_WSI_attn = False, return_WSI_feature = False):
+    def forward(self, x, return_WSI_attn=False, return_WSI_feature=False):
+        """Compute the AC_MIL forward pass for the supplied input tensors."""
         forward_return = {}
         x = self.dimreduction(x)
         q = self.q
@@ -77,15 +88,14 @@ class AC_MIL(nn.Module):
 
         attns = torch.cat(attns, 1)
         feat_bag = self.bag_attention(v, attns.softmax(dim=-1).mean(1, keepdim=True))
-        forward_return['logits'] = self.Slide_classifier(feat_bag)
-        forward_return['sub_preds'] = torch.cat(outputs, dim=0)
-        forward_return['attns'] = attns
+        forward_return["logits"] = self.Slide_classifier(feat_bag)
+        forward_return["sub_preds"] = torch.cat(outputs, dim=0)
+        forward_return["attns"] = attns
         if return_WSI_feature:
-            forward_return['WSI_feature'] = feat_bag
+            forward_return["WSI_feature"] = feat_bag
         if return_WSI_attn:
-            forward_return['WSI_attn'] = attns.mean(0).mean(0).unsqueeze(-1)
+            forward_return["WSI_attn"] = attns.mean(0).mean(0).unsqueeze(-1)
         return forward_return
-
 
 
 class MutiHeadAttention(nn.Module):
@@ -101,8 +111,9 @@ class MutiHeadAttention(nn.Module):
         downsample_rate: int = 1,
         dropout: float = 0.1,
         n_masked_patch: int = 0,
-        mask_drop: float = 0.0
+        mask_drop: float = 0.0,
     ) -> None:
+        """Initialize the MutiHeadAttention instance and configure its dependencies."""
         super().__init__()
         self.n_masked_patch = n_masked_patch
         self.mask_drop = mask_drop
@@ -120,17 +131,20 @@ class MutiHeadAttention(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def _separate_heads(self, x: Tensor, num_heads: int) -> Tensor:
+        """Separate heads."""
         b, n, c = x.shape
         x = x.reshape(b, n, num_heads, c // num_heads)
         return x.transpose(1, 2)  # B x N_heads x N_tokens x C_per_head
 
     def _recombine_heads(self, x: Tensor) -> Tensor:
+        """Recombine heads."""
         b, n_heads, n_tokens, c_per_head = x.shape
         x = x.transpose(1, 2)
         return x.reshape(b, n_tokens, n_heads * c_per_head)  # B x N_tokens x C
 
     def forward(self, q: Tensor, k: Tensor, v: Tensor) -> Tensor:
         # Input projections
+        """Compute the MutiHeadAttention forward pass for the supplied input tensors."""
         q = self.q_proj(q)
         k = self.k_proj(k)
         v = self.v_proj(v)
@@ -151,9 +165,11 @@ class MutiHeadAttention(nn.Module):
             n_masked_patch = min(self.n_masked_patch, c)
             _, indices = torch.topk(attn, n_masked_patch, dim=-1)
             indices = indices.reshape(b * h * q, -1)
-            rand_selected = torch.argsort(torch.rand(*indices.shape,device=attn.device), dim=-1)[:,:int(n_masked_patch * self.mask_drop)]
+            rand_selected = torch.argsort(torch.rand(*indices.shape, device=attn.device), dim=-1)[
+                :, : int(n_masked_patch * self.mask_drop)
+            ]
             masked_indices = indices[torch.arange(indices.shape[0]).unsqueeze(-1), rand_selected]
-            random_mask = torch.ones(b*h*q, c,device=attn.device)
+            random_mask = torch.ones(b * h * q, c, device=attn.device)
             random_mask.scatter_(-1, masked_indices, 0)
             attn = attn.masked_fill(random_mask.reshape(b, h, q, -1) == 0, -1e9)
 
@@ -168,6 +184,7 @@ class MutiHeadAttention(nn.Module):
 
         return out1[0], attn_out[0]
 
+
 class MutiHeadAttention_modify(nn.Module):
     """
     An attention layer that allows for downscaling the size of the embedding
@@ -175,12 +192,13 @@ class MutiHeadAttention_modify(nn.Module):
     """
 
     def __init__(
-            self,
-            embedding_dim: int,
-            num_heads: int,
-            downsample_rate: int = 1,
-            dropout: float = 0.1,
+        self,
+        embedding_dim: int,
+        num_heads: int,
+        downsample_rate: int = 1,
+        dropout: float = 0.1,
     ) -> None:
+        """Initialize the MutiHeadAttention_modify instance and configure its dependencies."""
         super().__init__()
         self.embedding_dim = embedding_dim
         self.internal_dim = embedding_dim // downsample_rate
@@ -194,17 +212,20 @@ class MutiHeadAttention_modify(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def _separate_heads(self, x: Tensor, num_heads: int) -> Tensor:
+        """Separate heads."""
         b, n, c = x.shape
         x = x.reshape(b, n, num_heads, c // num_heads)
         return x.transpose(1, 2)  # B x N_heads x N_tokens x C_per_head
 
     def _recombine_heads(self, x: Tensor) -> Tensor:
+        """Recombine heads."""
         b, n_heads, n_tokens, c_per_head = x.shape
         x = x.transpose(1, 2)
         return x.reshape(b, n_tokens, n_heads * c_per_head)  # B x N_tokens x C
 
     def forward(self, v: Tensor, attn: Tensor) -> Tensor:
         # Input projections
+        """Compute the MutiHeadAttention_modify forward pass for the supplied input tensors."""
         v = self.v_proj(v)
 
         # Separate into heads
@@ -222,32 +243,25 @@ class MutiHeadAttention_modify(nn.Module):
 
 class Attention_Gated(nn.Module):
     def __init__(self, L=512, D=128, K=1):
+        """Initialize the Attention_Gated instance and configure its dependencies."""
         super(Attention_Gated, self).__init__()
 
         self.L = L
         self.D = D
         self.K = K
 
-        self.attention_V = nn.Sequential(
-            nn.Linear(self.L, self.D),
-            nn.Tanh()
-        )
+        self.attention_V = nn.Sequential(nn.Linear(self.L, self.D), nn.Tanh())
 
-        self.attention_U = nn.Sequential(
-            nn.Linear(self.L, self.D),
-            nn.Sigmoid()
-        )
+        self.attention_U = nn.Sequential(nn.Linear(self.L, self.D), nn.Sigmoid())
 
         self.attention_weights = nn.Linear(self.D, self.K)
 
     def forward(self, x):
         ## x: N x L
+        """Compute the Attention_Gated forward pass for the supplied input tensors."""
         A_V = self.attention_V(x)  # NxD
         A_U = self.attention_U(x)  # NxD
-        A = self.attention_weights(A_V * A_U) # NxK
+        A = self.attention_weights(A_V * A_U)  # NxK
         A = torch.transpose(A, 1, 0)  # KxN
 
-
         return A  ### K x N
-
-

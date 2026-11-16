@@ -2,7 +2,7 @@ import sys
 import os
 import torch
 import traceback
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 from einops import rearrange
 from typing import Optional, Tuple, Dict, Any
 
@@ -12,51 +12,106 @@ from trident.IO import get_weights_path, get_dir
 This file contains 10+ pretrained slide encoders, all loadable via the encoder_factory() function.
 """
 
-def encoder_factory(model_name: str, pretrained: bool = True, freeze: bool = True, **kwargs: Dict[str, Any]) -> torch.nn.Module:
-        """
-        Build a slide encoder model.
 
-        Parameters:
-            model_name (str):
-                Name of the model to build.
-            pretrained (bool):
-                Whether to load pretrained weights.
-            freeze (bool):
-                Whether to freeze the weights of the model.
-            **kwargs (dict):
-                Additional arguments to pass to the model constructor.
+def encoder_factory(
+    model_name: str, pretrained: bool = True, freeze: bool = True, **kwargs: Dict[str, Any]
+) -> torch.nn.Module:
+    """
+    Build a slide encoder model.
 
-        Returns:
-            torch.nn.Module: The slide encoder model.
-        """
+    Parameters:
+        model_name (str):
+            Name of the model to build.
+        pretrained (bool):
+            Whether to load pretrained weights.
+        freeze (bool):
+            Whether to freeze the weights of the model.
+        **kwargs (dict):
+            Additional arguments to pass to the model constructor.
 
-        if model_name.startswith('mean-'):
-            return encoder_registry[model_name](model_name=model_name)
-        elif model_name in encoder_registry:
-            return encoder_registry[model_name](pretrained=pretrained, freeze=freeze, **kwargs)
-        else:
-            raise ValueError(f"Unknown encoder name {model_name}")
+    Returns:
+        torch.nn.Module: The slide encoder model.
+    """
+
+    if model_name.startswith("mean-"):
+        return encoder_registry[model_name](model_name=model_name)
+    elif model_name in encoder_registry:
+        return encoder_registry[model_name](pretrained=pretrained, freeze=freeze, **kwargs)
+    else:
+        raise ValueError(f"Unknown encoder name {model_name}")
+
+
+# flash-attn only ships kernels for the SM architectures it was compiled for. Releases before 2.7.3
+# stop at sm_90, so Blackwell (sm_100 / sm_120) fails at the first attention call with
+# "FlashAttention only supports Ampere GPUs or newer" no matter what a given model's API floor is.
+BLACKWELL_MIN_FLASH_ATTN = "2.7.3"
+
+
+def _require_flash_attn(model_name: str, minimum: str) -> None:
+    """
+    Check the installed flash-attn against a model's API floor and against the current GPU.
+
+    Parameters:
+        model_name (str):
+            Encoder name, used in error messages.
+        minimum (str):
+            Lowest flash-attn version whose Python API this model is known to work with.
+
+    Raises:
+        Exception: If flash-attn is missing, older than `minimum`, or too old for this GPU.
+    """
+    from packaging.version import Version
+
+    try:
+        import flash_attn
+    except:
+        traceback.print_exc()
+        raise Exception(
+            f"{model_name} requires flash_attn >= {minimum}. Install it with "
+            f"`pip install 'flash_attn>={minimum}'`."
+        )
+
+    installed = Version(flash_attn.__version__)
+    if installed < Version(minimum):
+        raise Exception(
+            f"{model_name} requires flash_attn >= {minimum}, but found {flash_attn.__version__}. "
+            f"Upgrade with `pip install 'flash_attn>={minimum}'`."
+        )
+
+    if torch.cuda.is_available():
+        major, minor = torch.cuda.get_device_capability()
+        if major >= 10 and installed < Version(BLACKWELL_MIN_FLASH_ATTN):
+            raise Exception(
+                f"flash_attn {flash_attn.__version__} has no kernels for this GPU "
+                f"(sm_{major}{minor}); releases before {BLACKWELL_MIN_FLASH_ATTN} only compile up to "
+                f"sm_90. Install flash_attn >= {BLACKWELL_MIN_FLASH_ATTN}, which is API-compatible "
+                f"with {model_name}. PyPI ships only an sdist, so prefer a prebuilt wheel matching "
+                "your torch/CUDA/Python from "
+                "https://github.com/Dao-AILab/flash-attention/releases, or build from source: "
+                f"`FLASH_ATTN_CUDA_ARCHS={major}{minor} pip install "
+                f"--no-build-isolation flash-attn>={BLACKWELL_MIN_FLASH_ATTN}` (needs nvcc >= 12.8)."
+            )
 
 
 # Map from slide encoder to required patch encoder
 # Used in Processor.py to load the correct patch encoder for a given slide encoder
 slide_to_patch_encoder_name = {
-    'threads': 'conch_v15',
-    'titan': 'conch_v15',
-    'tcga': 'conch_v15',
-    'prism': 'virchow',
-    'chief': 'ctranspath',
-    'gigapath': 'gigapath',
-    'madeleine': 'conch_v1',
-    'feather': 'conch_v15',
-    'feather_uni_v2': 'uni_v2',
-    'care': 'conch_v15',
+    "threads": "conch_v15",
+    "titan": "conch_v15",
+    "tcga": "conch_v15",
+    "prism": "virchow",
+    "prism2": "virchow2-cls",
+    "chief": "ctranspath",
+    "gigapath": "gigapath",
+    "gigapath-flash": "gigapath-flash",
+    "madeleine": "conch_v1",
+    "feather": "conch_v15",
+    "feather_uni_v2": "uni_v2",
+    "care": "conch_v15",
 }
 
 
-
-class BaseSlideEncoder(torch.nn.Module):
-    
+class BaseSlideEncoder(torch.nn.Module, ABC):
     def __init__(self, freeze: bool = True, **build_kwargs: Dict[str, Any]) -> None:
         """
         Parent class for all pretrained slide encoders.
@@ -70,14 +125,19 @@ class BaseSlideEncoder(torch.nn.Module):
             for param in self.model.parameters():
                 param.requires_grad = False
             self.model.eval()
-        
+
     def forward(self, batch: torch.Tensor) -> torch.Tensor:
         """
         Can be overwritten if model requires special forward pass.
         """
         z = self.model(batch)
         return z
-        
+
+    @property
+    def name(self) -> Optional[str]:
+        """Canonical model id — uniform ``.name`` accessor shared across all model families."""
+        return self.enc_name
+
     @abstractmethod
     def _build(self, **build_kwargs: Dict[str, Any]) -> Tuple[torch.nn.Module, torch.dtype, int]:
         """
@@ -88,16 +148,16 @@ class BaseSlideEncoder(torch.nn.Module):
 
 class CustomSlideEncoder(BaseSlideEncoder):
     def __init__(
-        self, 
-        enc_name: str, 
-        model: torch.nn.Module, 
-        precision: torch.dtype = torch.float32, 
-        embedding_dim: Optional[int] = None
+        self,
+        enc_name: str,
+        model: torch.nn.Module,
+        precision: torch.dtype = torch.float32,
+        embedding_dim: Optional[int] = None,
     ):
         """
         CustomSlideEncoder initialization.
 
-        This class is used when the model and precision are pre-instantiated externally 
+        This class is used when the model and precision are pre-instantiated externally
         and should be injected directly into the encoder wrapper.
 
         Parameters:
@@ -114,20 +174,20 @@ class CustomSlideEncoder(BaseSlideEncoder):
         self.enc_name = enc_name
         self.model = model
         self.precision = precision
-        self.embedding_dim = embedding_dim or getattr(model, 'embedding_dim', None)
+        self.embedding_dim = embedding_dim or getattr(model, "embedding_dim", None)
 
     def _build(self, **build_kwargs: Dict[str, Any]) -> Tuple[None, None, None]:
+        """Build."""
         return None, None, None
 
 
 class ABMILSlideEncoder(BaseSlideEncoder):
-
     def __init__(self, **build_kwargs: Dict[str, Any]):
         """
         ABMIL initialization.
         """
         super().__init__(**build_kwargs)
-    
+
     def _build(
         self,
         input_feature_dim: int,
@@ -135,71 +195,77 @@ class ABMILSlideEncoder(BaseSlideEncoder):
         head_dim: int,
         dropout: float,
         gated: bool,
-        pretrained: bool = False
+        pretrained: bool = False,
     ) -> Tuple[torch.nn.ModuleDict, torch.dtype, int]:
-        
+        """Build."""
         from trident.slide_encoder_models.model_zoo.reusable_blocks.ABMIL import ABMIL
         import torch.nn as nn
 
-        self.enc_name = 'abmil'
-        
-        assert pretrained is False, "ABMILSlideEncoder has no corresponding pretrained models. Please load with pretrained=False."
-                                
-        pre_attention_layers = nn.Sequential(
-            nn.Linear(input_feature_dim, input_feature_dim),
-            nn.GELU(),
-            nn.Dropout(0.1)
+        self.enc_name = "abmil"
+
+        assert pretrained is False, (
+            "ABMILSlideEncoder has no corresponding pretrained models. Please load with pretrained=False."
         )
-        
+
+        pre_attention_layers = nn.Sequential(
+            nn.Linear(input_feature_dim, input_feature_dim), nn.GELU(), nn.Dropout(0.1)
+        )
+
         image_pooler = ABMIL(
             n_heads=n_heads,
             feature_dim=input_feature_dim,
             head_dim=head_dim,
             dropout=dropout,
             n_branches=1,
-            gated=gated
+            gated=gated,
         )
-        
+
         post_attention_layers = nn.Sequential(
-            nn.Linear(input_feature_dim, input_feature_dim),
-            nn.GELU(),
-            nn.Dropout(0.1)
+            nn.Linear(input_feature_dim, input_feature_dim), nn.GELU(), nn.Dropout(0.1)
         )
-        
-        model = nn.ModuleDict({
-            'pre_attention_layers': pre_attention_layers,
-            'image_pooler': image_pooler,
-            'post_attention_layers': post_attention_layers
-        })
-        
+
+        model = nn.ModuleDict(
+            {
+                "pre_attention_layers": pre_attention_layers,
+                "image_pooler": image_pooler,
+                "post_attention_layers": post_attention_layers,
+            }
+        )
+
         precision = torch.float32
         embedding_dim = input_feature_dim
         return model, precision, embedding_dim
 
-    def forward(self, batch, device='cuda', return_raw_attention=False):
-        image_features = self.model['pre_attention_layers'](batch['features'].to(device))
-        image_features, attn = self.model['image_pooler'](image_features) # Features shape: (b n_branches f), where n_branches = 1. Branching is not used in this implementation.
-        image_features = rearrange(image_features, 'b 1 f -> b f')
-        image_features = self.model['post_attention_layers'](image_features)# Attention scores shape: (b r h n), where h is number of attention heads 
+    def forward(self, batch, device="cuda", return_raw_attention=False):
+        """Compute the ABMILSlideEncoder forward pass for the supplied input tensors."""
+        image_features = self.model["pre_attention_layers"](batch["features"].to(device))
+        image_features, attn = self.model["image_pooler"](
+            image_features
+        )  # Features shape: (b n_branches f), where n_branches = 1. Branching is not used in this implementation.
+        image_features = rearrange(image_features, "b 1 f -> b f")
+        image_features = self.model["post_attention_layers"](
+            image_features
+        )  # Attention scores shape: (b r h n), where h is number of attention heads
         if return_raw_attention:
             return image_features, attn
         return image_features
 
 
 class PRISMSlideEncoder(BaseSlideEncoder):
-
     def __init__(self, **build_kwargs):
         """
         PRISM initialization.
         """
         super().__init__(**build_kwargs)
-    
+
     def _build(self, pretrained=True):
-        
-        self.enc_name = 'prism'
+        """Build."""
+        self.enc_name = "prism"
 
         if sys.version_info < (3, 10):
-            raise RuntimeError("PRISM requires Python 3.10 or above. Please update your Python interpreter.")
+            raise RuntimeError(
+                "PRISM requires Python 3.10 or above. Please update your Python interpreter."
+            )
 
         try:
             import environs  # weird dependencies required by PRISM
@@ -208,29 +274,91 @@ class PRISMSlideEncoder(BaseSlideEncoder):
         except:
             traceback.print_exc()
             raise Exception(
-                "Please run `pip install environs==11.0.0 transformers==4.42.4 sacremoses==0.1.1` "
+                "Please run `pip install environs==11.0.0 'transformers>=4.51,<5' sacremoses==0.1.1` "
                 "and ensure Python version is 3.10 or above."
             )
 
         if pretrained:
-            model = AutoModel.from_pretrained('paige-ai/Prism', trust_remote_code=True)
+            model = AutoModel.from_pretrained("paige-ai/Prism", trust_remote_code=True)
         else:
-            model = AutoModel.from_config(AutoConfig.from_pretrained('paige-ai/Prism'))
+            model = AutoModel.from_config(AutoConfig.from_pretrained("paige-ai/Prism"))
         model.text_decoder = None
         precision = torch.float16
         embedding_dim = 1280
         return model, precision, embedding_dim
-    
-    def forward(self, batch, device='cuda'):
+
+    def forward(self, batch, device="cuda"):
         # input should be of shape (batch_size, tile_seq_len, tile_embed_dim)
-        x = batch['features'].to(device)
+        """Compute the PRISMSlideEncoder forward pass for the supplied input tensors."""
+        x = batch["features"].to(device)
         z = self.model.slide_representations(x)
-        z = z['image_embedding'] 
+        z = z["image_embedding"]
         return z
-    
+
+
+class PRISM2SlideEncoder(BaseSlideEncoder):
+    def __init__(self, **build_kwargs):
+        """
+        PRISM2 initialization.
+        """
+        super().__init__(**build_kwargs)
+
+    def _build(self, pretrained=True):
+        """Build."""
+        self.enc_name = "prism2"
+
+        from packaging.version import Version
+
+        try:
+            import einops  # noqa: F401  (required by the remote modeling code)
+            import transformers
+            from transformers import AutoModel, AutoConfig, AutoProcessor
+
+            assert Version(transformers.__version__) >= Version("4.51")
+        except:
+            traceback.print_exc()
+            raise Exception(
+                "PRISM2 requires einops and transformers >= 4.51. Install with "
+                "`pip install einops 'transformers>=4.51,<5'`."
+            )
+
+        # PRISM2's Phi-3 decoder is loaded with FlashAttention-2; the model card asks for >= 2.6.3.
+        _require_flash_attn("PRISM2", "2.6.3")
+
+        if pretrained:
+            model = AutoModel.from_pretrained(
+                "paige-ai/Prism2", trust_remote_code=True, torch_dtype="auto"
+            )
+        else:
+            model = AutoModel.from_config(
+                AutoConfig.from_pretrained("paige-ai/Prism2", trust_remote_code=True),
+                trust_remote_code=True,
+            )
+        # We only expose the base embedding, which is pure perceiver pooling. Drop the text decoder
+        # rather than carry 85% of the parameters unused, as done for PRISM v1.
+        model.text_decoder = None
+        # Packs the variable-length per-slide tile sequences into a padded batch + attention mask.
+        self.processor = AutoProcessor.from_pretrained("paige-ai/Prism2", trust_remote_code=True)
+
+        precision = torch.bfloat16
+        embedding_dim = 2560
+        return model, precision, embedding_dim
+
+    def forward(self, batch, device="cuda"):
+        # PRISM2 consumes class-token-only Virchow2 features: (batch_size, tile_seq_len, 1280).
+        """Compute the PRISM2SlideEncoder forward pass for the supplied input tensors."""
+        features = batch["features"].to(device)
+        inputs = self.processor(tile_embeddings=list(features)).to(device)
+
+        # Autocast explicitly rather than relying on the caller: PRISM2 is documented to run under
+        # bfloat16, and TRIDENT's slide-feature path opens an autocast context without a dtype
+        # (which defaults to float16 on CUDA). A nested context takes precedence.
+        with torch.autocast(device_type=torch.device(device).type, dtype=torch.bfloat16):
+            z = self.model.get_base_embedding(**inputs)  # (B, 2560)
+        return z
+
 
 class CHIEFSlideEncoder(BaseSlideEncoder):
-
     def __init__(self, **build_kwargs):
         """
         CHIEF initialization.
@@ -238,9 +366,9 @@ class CHIEFSlideEncoder(BaseSlideEncoder):
         super().__init__(**build_kwargs)
 
     def _build(self, pretrained=True):
-        
-        self.enc_name = 'chief'
-        weights_path = get_weights_path('slide', self.enc_name)
+        """Build."""
+        self.enc_name = "chief"
+        weights_path = get_weights_path("slide", self.enc_name)
 
         # Ensure model can be built.
         try:
@@ -291,24 +419,36 @@ class CHIEFSlideEncoder(BaseSlideEncoder):
 
         # Load pretrained weights
         if pretrained:
-            td = torch.load(os.path.join('model_weight', 'CHIEF_pretraining.pth'), map_location='cpu', weights_only=True)
+            td = torch.load(
+                os.path.join("model_weight", "CHIEF_pretraining.pth"),
+                map_location="cpu",
+                weights_only=True,
+            )
             model.load_state_dict(td, strict=True)
-            
+
         # Return to original working directory
         os.chdir(current_wd)
-        
+
         precision = torch.float32
         embedding_dim = 768
         return model, precision, embedding_dim
-    
-    def forward(self, batch, device='cuda'):
-        x = batch['features'].squeeze(0).to(device)
+
+    def forward(self, batch, device="cuda"):
+        """Compute the CHIEFSlideEncoder forward pass for the supplied input tensors."""
+        x = batch["features"].squeeze(0).to(device)
         z = self.model(x, torch.tensor([0]))
-        z = z['WSI_feature']  # Shape (1,768)
+        z = z["WSI_feature"]  # Shape (1,768)
         return z
-    
+
 
 class GigaPathSlideEncoder(BaseSlideEncoder):
+    """GigaPath LongNet slide encoder (base class). Subclassed per variant (see below)."""
+
+    ENC_NAME = "gigapath"
+    SLIDE_ENC_ARCH = "gigapath_slide_enc12l768d"
+    IN_CHANS = 1536  # dim of the paired tile encoder's embeddings
+    EMBED_DIM = 768  # dim of the slide embedding
+    HF_REPO = "prov-gigapath/prov-gigapath"
 
     def __init__(self, **build_kwargs):
         """
@@ -317,44 +457,73 @@ class GigaPathSlideEncoder(BaseSlideEncoder):
         super().__init__(**build_kwargs)
 
     def _build(self, pretrained=True):
-
-        self.enc_name = 'gigapath'
+        """Build."""
+        self.enc_name = self.ENC_NAME
 
         try:
             from gigapath.slide_encoder import create_model
         except:
             traceback.print_exc()
-            raise Exception("Please install fairscale and gigapath using `pip install fairscale git+https://github.com/prov-gigapath/prov-gigapath.git`.")
-        
-        # Make sure flash_attn is correct version
-        try:
-            import flash_attn; assert flash_attn.__version__ == '2.5.8'
-        except:
-            traceback.print_exc()
-            raise Exception("Please install flash_attn version 2.5.8 using `pip install flash_attn==2.5.8`.")
-        
-        if pretrained:
-            weights_path = get_weights_path('slide', self.enc_name)
-            if weights_path:
-                model = create_model(weights_path, "gigapath_slide_enc12l768d", 1536, global_pool=True)
-            else:
-                model = create_model("hf_hub:prov-gigapath/prov-gigapath", "gigapath_slide_enc12l768d", 1536, global_pool=True)
-        else:
-            model = create_model("", "gigapath_slide_enc12l768d", 1536, global_pool=True)
-        
-        
-        precision = torch.float16
-        embedding_dim = 768
-        return model, precision, embedding_dim
+            raise Exception(
+                "Please install fairscale and gigapath using `pip install fairscale git+https://github.com/prov-gigapath/prov-gigapath.git`."
+            )
 
-    def forward(self, batch, device='cuda'):
-        self.model.tile_size = batch['attributes']['patch_size_level0']
-        z = self.model(batch['features'].to(device), batch['coords'].to(device), all_layer_embed=True)[11]
+        # Importing gigapath.slide_encoder registers the LongNet architectures with timm. Older
+        # gigapath releases predate the GigaPath-Flash variant, so check before building.
+        import timm
+
+        if not timm.is_model(self.SLIDE_ENC_ARCH):
+            raise Exception(
+                f"Slide encoder architecture '{self.SLIDE_ENC_ARCH}' is not registered by your gigapath "
+                "install. Upgrade it with `pip install --upgrade --force-reinstall --no-deps "
+                "git+https://github.com/prov-gigapath/prov-gigapath.git`."
+            )
+
+        # LongNet only calls `flash_attn_func(..., return_attn_probs=True)`, whose signature and
+        # 3-tuple return are unchanged from 2.5.8 through at least 2.8.3, so no upper bound applies.
+        _require_flash_attn(self.enc_name, "2.5.8")
+
+        weights_path = ""
+        if pretrained:
+            weights_path = get_weights_path("slide", self.enc_name)
+            if not weights_path:
+                # Download explicitly rather than passing `hf_hub:...` to `create_model`, which
+                # force-downloads every variant to the same `~/.cache/slide_encoder.pth`.
+                from huggingface_hub import hf_hub_download
+
+                weights_path = hf_hub_download(repo_id=self.HF_REPO, filename="slide_encoder.pth")
+
+        model = create_model(weights_path, self.SLIDE_ENC_ARCH, self.IN_CHANS, global_pool=True)
+
+        precision = torch.float16
+        return model, precision, self.EMBED_DIM
+
+    def forward(self, batch, device="cuda"):
+        """Compute the GigaPathSlideEncoder forward pass for the supplied input tensors."""
+        self.model.tile_size = batch["attributes"]["patch_size_level0"]
+        z = self.model(
+            batch["features"].to(device), batch["coords"].to(device), all_layer_embed=True
+        )[11]
         return z
 
 
-class MadeleineSlideEncoder(BaseSlideEncoder):
+class GigaPathFlashSlideEncoder(GigaPathSlideEncoder):
+    """GigaPath-Flash LongNet slide encoder (12 layers, 384-dim), paired with the ViT-S/16 tile encoder."""
 
+    ENC_NAME = "gigapath-flash"
+    SLIDE_ENC_ARCH = "gigapath_slide_enc12l384d"
+    IN_CHANS = 384
+    EMBED_DIM = 384
+    HF_REPO = "prov-gigapath/prov-gigapath-flash"
+
+    def __init__(self, **build_kwargs):
+        """
+        GigaPath-Flash initialization.
+        """
+        super().__init__(**build_kwargs)
+
+
+class MadeleineSlideEncoder(BaseSlideEncoder):
     def __init__(self, **build_kwargs):
         """
         Madeleine initialization.
@@ -362,11 +531,13 @@ class MadeleineSlideEncoder(BaseSlideEncoder):
         super().__init__(**build_kwargs)
 
     def _build(self, pretrained=True):
+        """Build."""
+        assert pretrained, (
+            "MadeleineSlideEncoder has no non-pretrained models. Please load with pretrained=True."
+        )
 
-        assert pretrained, "MadeleineSlideEncoder has no non-pretrained models. Please load with pretrained=True."
-
-        self.enc_name = 'madeleine'
-        weights_path = get_weights_path('slide', self.enc_name)
+        self.enc_name = "madeleine"
+        weights_path = get_weights_path("slide", self.enc_name)
         if not weights_path:
             weights_path = os.path.join(get_dir(), "models", "madeleine")
         embedding_dim = 512
@@ -375,19 +546,21 @@ class MadeleineSlideEncoder(BaseSlideEncoder):
             from madeleine.models.factory import create_model_from_pretrained
         except:
             traceback.print_exc()
-            raise Exception("Please install Madeleine using `pip install git+https://github.com/mahmoodlab/MADELEINE.git`")  
-        
+            raise Exception(
+                "Please install Madeleine using `pip install git+https://github.com/mahmoodlab/MADELEINE.git`"
+            )
+
         model, precision = create_model_from_pretrained(weights_path)
 
         return model, precision, embedding_dim
-    
-    def forward(self, x, device='cuda'):
-        z = self.model.encode_he(x['features'], device)
+
+    def forward(self, x, device="cuda"):
+        """Compute the MadeleineSlideEncoder forward pass for the supplied input tensors."""
+        z = self.model.encode_he(x["features"], device)
         return z
 
 
 class ThreadsSlideEncoder(BaseSlideEncoder):
-
     def __init__(self, **build_kwargs):
         """
         Threads initialization.
@@ -395,18 +568,19 @@ class ThreadsSlideEncoder(BaseSlideEncoder):
         super().__init__(**build_kwargs)
 
     def _build(self, pretrained=True):
-
-        self.enc_name = 'threads'
+        """Build."""
+        self.enc_name = "threads"
 
         try:
             from threadsmodel.inference import create_model, create_model_from_pretrained
         except:
             traceback.print_exc()
             raise Exception("Coming Soon! Thanks for your patience.")
-        
+
         return None, None, None
 
-    def forward(self, batch, device='cuda', return_raw_attention=False):
+    def forward(self, batch, device="cuda", return_raw_attention=False):
+        """Compute the ThreadsSlideEncoder forward pass for the supplied input tensors."""
         pass
 
 
@@ -416,15 +590,16 @@ class CARESlideEncoder(BaseSlideEncoder):
         super().__init__(**build_kwargs)
 
     def _build(self, pretrained=True):
-        self.enc_name = 'care'
-        assert pretrained, "CARESlideEncoder has no non-pretrained model. Please load with pretrained=True."
+        """Build."""
+        self.enc_name = "care"
+        assert pretrained, (
+            "CARESlideEncoder has no non-pretrained model. Please load with pretrained=True."
+        )
 
         from transformers import AutoModel
+
         try:
-            model = AutoModel.from_pretrained(
-                "Zipper-1/CARE",
-                trust_remote_code=True
-            )
+            model = AutoModel.from_pretrained("Zipper-1/CARE", trust_remote_code=True)
         except Exception:
             traceback.print_exc()
             raise Exception(
@@ -437,27 +612,24 @@ class CARESlideEncoder(BaseSlideEncoder):
         embedding_dim = 512
         return model, precision, embedding_dim
 
-    def forward(self, batch, device='cuda'):
-        features = batch['features'].to(device)
-        coords = batch['coords'].to(device)
-        patch_size = batch['attributes']['patch_size_level0']
+    def forward(self, batch, device="cuda"):
+        """Compute the CARESlideEncoder forward pass for the supplied input tensors."""
+        features = batch["features"].to(device)
+        coords = batch["coords"].to(device)
+        patch_size = batch["attributes"]["patch_size_level0"]
         coords = coords // int(patch_size)
         if features.dim() == 2:
             features = features.unsqueeze(0)
         if coords.dim() == 2:
             coords = coords.unsqueeze(0)
         N_values = torch.full(
-            (features.shape[0],),
-            features.shape[1],
-            dtype=torch.long,
-            device=features.device
+            (features.shape[0],), features.shape[1], dtype=torch.long, device=features.device
         )
         out = self.model(features, N_values, coords)
         return out.wsi_embedding
 
 
 class TitanSlideEncoder(BaseSlideEncoder):
-    
     def __init__(self, **build_kwargs):
         """
         Titan initialization.
@@ -465,172 +637,215 @@ class TitanSlideEncoder(BaseSlideEncoder):
         super().__init__(**build_kwargs)
 
     def _build(self, pretrained=True):
-        self.enc_name = 'titan'
-        assert pretrained, "TitanSlideEncoder has no non-pretrained models. Please load with pretrained=True."
-        from transformers import AutoModel 
-        model = AutoModel.from_pretrained('MahmoodLab/TITAN', trust_remote_code=True)
+        """Build."""
+        self.enc_name = "titan"
+        assert pretrained, (
+            "TitanSlideEncoder has no non-pretrained models. Please load with pretrained=True."
+        )
+        from transformers import AutoModel
+
+        # transformers compatibility shim: TITAN's remote code references
+        # PreTrainedModel.all_tied_weights_keys, which is absent in some transformers versions
+        # and makes from_pretrained raise. Define it as empty if missing (harmless when present).
+        try:
+            from transformers.modeling_utils import PreTrainedModel
+
+            if not hasattr(PreTrainedModel, "all_tied_weights_keys"):
+                PreTrainedModel.all_tied_weights_keys = {}
+        except Exception:
+            pass
+        model = AutoModel.from_pretrained("MahmoodLab/TITAN", trust_remote_code=True)
         precision = torch.float16
         embedding_dim = 768
         return model, precision, embedding_dim
 
-    def forward(self, batch, device='cuda'):
-        z = self.model.encode_slide_from_patch_features(batch['features'].to(device), batch['coords'].to(device), batch['attributes']['patch_size_level0'])        
+    def forward(self, batch, device="cuda"):
+        """Compute the TitanSlideEncoder forward pass for the supplied input tensors."""
+        z = self.model.encode_slide_from_patch_features(
+            batch["features"].to(device),
+            batch["coords"].to(device),
+            batch["attributes"]["patch_size_level0"],
+        )
         return z
-    
-class FeatherSlideEncoder(BaseSlideEncoder):
 
+
+class FeatherSlideEncoder(BaseSlideEncoder):
     def __init__(self, **build_kwargs):
         """
         Feather initialization.
         """
-        super().__init__(**build_kwargs)    
+        super().__init__(**build_kwargs)
 
     def _build(self, pretrained=True):
-        self.enc_name = 'feather'
+        """Build."""
+        self.enc_name = "feather"
 
-        assert pretrained, "FeatherSlideEncoder has no non-pretrained models. Please load with pretrained=True."
-        from transformers import AutoModel 
+        assert pretrained, (
+            "FeatherSlideEncoder has no non-pretrained models. Please load with pretrained=True."
+        )
+        from transformers import AutoModel
         from huggingface_hub import snapshot_download
 
         model_path = snapshot_download(
             repo_id="MahmoodLab/abmil.base.conch_v15.pc108-24k",
             revision="main",
-            allow_patterns=["*.py", "model.safetensors", "config.json"]
+            allow_patterns=["*.py", "model.safetensors", "config.json"],
         )
         model = AutoModel.from_pretrained(model_path, trust_remote_code=True)
         precision = torch.float32
         embedding_dim = 512
 
         return model, precision, embedding_dim
-    
-    def forward(self, batch, device='cuda'):
-        z, _ = self.model.forward_features(batch['features'].to(device))
+
+    def forward(self, batch, device="cuda"):
+        """Compute the FeatherSlideEncoder forward pass for the supplied input tensors."""
+        z, _ = self.model.forward_features(batch["features"].to(device))
         return z
 
-class FeatherUni2SlideEncoder(BaseSlideEncoder):
 
+class FeatherUni2SlideEncoder(BaseSlideEncoder):
     def __init__(self, **build_kwargs):
         """
         FeatherUni2SlideEncoder initialization.
         """
-        super().__init__(**build_kwargs)    
+        super().__init__(**build_kwargs)
 
     def _build(self, pretrained=True):
-        self.enc_name = 'feather_uni_v2'
+        """Build."""
+        self.enc_name = "feather_uni_v2"
 
-        assert pretrained, "FeatherUni2SlideEncoder has no non-pretrained models. Please load with pretrained=True."
-        from transformers import AutoModel 
+        assert pretrained, (
+            "FeatherUni2SlideEncoder has no non-pretrained models. Please load with pretrained=True."
+        )
+        from transformers import AutoModel
         from huggingface_hub import snapshot_download
 
         model_path = snapshot_download(
             repo_id="MahmoodLab/abmil.base.uni_v2.pc108-24k",
             revision="main",
-            allow_patterns=["*.py", "model.safetensors", "config.json"]
+            allow_patterns=["*.py", "model.safetensors", "config.json"],
         )
         model = AutoModel.from_pretrained(model_path, trust_remote_code=True)
         precision = torch.float32
         embedding_dim = 512
 
         return model, precision, embedding_dim
-    
-    def forward(self, batch, device='cuda'):
-        z, _ = self.model.forward_features(batch['features'].to(device))
+
+    def forward(self, batch, device="cuda"):
+        """Compute the FeatherUni2SlideEncoder forward pass for the supplied input tensors."""
+        z, _ = self.model.forward_features(batch["features"].to(device))
         return z
 
 
 class MeanSlideEncoder(BaseSlideEncoder):
-
     def __init__(self, **build_kwargs):
         """
         Mean pooling initialization.
         """
         super().__init__(**build_kwargs)
 
-    def _build(self, model_name = 'mean-default'):
+    def _build(self, model_name="mean-default"):
+        """Build."""
         self.enc_name = model_name
-        
-        if model_name == 'mean-conch_v1':
+
+        if model_name == "mean-conch_v1":
             embedding_dim = 512
-        elif model_name == 'mean-conch_v15':
+        elif model_name == "mean-conch_v15":
             embedding_dim = 768
-        elif model_name == 'mean-uni_v1':
+        elif model_name == "mean-uni_v1":
             embedding_dim = 1024
-        elif model_name == 'mean-uni_v2':
+        elif model_name == "mean-uni_v2":
             embedding_dim = 1536
-        elif model_name == 'mean-ctranspath':
+        elif model_name == "mean-ctranspath":
             embedding_dim = 768
-        elif model_name == 'mean-phikon':
+        elif model_name == "mean-phikon":
             embedding_dim = 768
-        elif model_name == 'mean-resnet50':
+        elif model_name == "mean-resnet50":
             embedding_dim = 1024
-        elif model_name == 'mean-gigapath':
+        elif model_name == "mean-gigapath":
             embedding_dim = 1536
-        elif model_name == 'mean-virchow':
-            embedding_dim = 2560
-        elif model_name == 'mean-virchow2':
-            embedding_dim = 2560
-        elif model_name == 'mean-hoptimus0':
-            embedding_dim = 1536
-        elif model_name == 'mean-phikon_v2':
-            embedding_dim = 1024
-        elif model_name == 'mean-musk':
-            embedding_dim = 1024
-        elif model_name == 'mean-hibou_l':
-            embedding_dim = 1024
-        elif model_name == 'mean-kaiko-vit8s':
+        elif model_name == "mean-gigapath-flash":
             embedding_dim = 384
-        elif model_name == 'mean-kaiko-vit16s':
-            embedding_dim = 384
-        elif model_name == 'mean-kaiko-vit8b':
-            embedding_dim = 768
-        elif model_name == 'mean-kaiko-vit16b':
-            embedding_dim = 768
-        elif model_name == 'mean-kaiko-vit14l':
+        elif model_name == "mean-virchow":
+            embedding_dim = 2560
+        elif model_name == "mean-virchow2":
+            embedding_dim = 2560
+        elif model_name == "mean-virchow2-cls":
+            embedding_dim = 1280
+        elif model_name == "mean-hoptimus0":
+            embedding_dim = 1536
+        elif model_name == "mean-phikon_v2":
             embedding_dim = 1024
-        elif model_name == 'lunit-vits8':
+        elif model_name == "mean-phaet":
+            embedding_dim = 1024
+        elif model_name == "mean-mascaret":
+            embedding_dim = 1536
+        elif model_name == "mean-musk":
+            embedding_dim = 1024
+        elif model_name == "mean-hibou_l":
+            embedding_dim = 1024
+        elif model_name == "mean-kaiko-vit8s":
+            embedding_dim = 384
+        elif model_name == "mean-kaiko-vit16s":
+            embedding_dim = 384
+        elif model_name == "mean-kaiko-vit8b":
+            embedding_dim = 768
+        elif model_name == "mean-kaiko-vit16b":
+            embedding_dim = 768
+        elif model_name == "mean-kaiko-vit14l":
+            embedding_dim = 1024
+        elif model_name == "lunit-vits8":
             embedding_dim = 384
         else:
-            print(f"\033[93mWARNING: Could not automatically infer embedding_dim for mean encoder {self.enc_name}. Setting to None.\033[0m")
+            print(
+                f"\033[93mWARNING: Could not automatically infer embedding_dim for mean encoder {self.enc_name}. Setting to None.\033[0m"
+            )
             embedding_dim = None
-            
+
         return None, None, embedding_dim
 
-    def forward(self, batch, device='cuda'):
-        z = batch['features'].to(device).mean(dim=1) # Just mean pooling
+    def forward(self, batch, device="cuda"):
+        """Compute the MeanSlideEncoder forward pass for the supplied input tensors."""
+        z = batch["features"].to(device).mean(dim=1)  # Just mean pooling
         return z
 
+
 encoder_registry = {
-
     # Slide-level models
-    'threads': ThreadsSlideEncoder,
-    'titan': TitanSlideEncoder,
-    'prism': PRISMSlideEncoder,
-    'chief': CHIEFSlideEncoder,
-    'gigapath': GigaPathSlideEncoder,
-    'madeleine': MadeleineSlideEncoder,
-    'feather': FeatherSlideEncoder,
-    'feather_uni_v2': FeatherUni2SlideEncoder,
-    'care': CARESlideEncoder,
-    'abmil': ABMILSlideEncoder,
-
+    "threads": ThreadsSlideEncoder,
+    "titan": TitanSlideEncoder,
+    "prism": PRISMSlideEncoder,
+    "prism2": PRISM2SlideEncoder,
+    "chief": CHIEFSlideEncoder,
+    "gigapath": GigaPathSlideEncoder,
+    "gigapath-flash": GigaPathFlashSlideEncoder,
+    "madeleine": MadeleineSlideEncoder,
+    "feather": FeatherSlideEncoder,
+    "feather_uni_v2": FeatherUni2SlideEncoder,
+    "care": CARESlideEncoder,
+    "abmil": ABMILSlideEncoder,
     # Mean encoders
-    'mean-conch_v1': MeanSlideEncoder,
-    'mean-conch_v15': MeanSlideEncoder,
-    'mean-uni_v1': MeanSlideEncoder,
-    'mean-uni_v2': MeanSlideEncoder,
-    'mean-ctranspath': MeanSlideEncoder,
-    'mean-phikon': MeanSlideEncoder,
-    'mean-resnet50': MeanSlideEncoder,
-    'mean-gigapath': MeanSlideEncoder,
-    'mean-virchow': MeanSlideEncoder,
-    'mean-virchow2': MeanSlideEncoder,
-    'mean-hoptimus0': MeanSlideEncoder,
-    'mean-phikon_v2': MeanSlideEncoder,
-    'mean-musk': MeanSlideEncoder,
-    'mean-hibou_l': MeanSlideEncoder,
-    'mean-kaiko-vit8s': MeanSlideEncoder,
-    'mean-kaiko-vit16s': MeanSlideEncoder,
-    'mean-kaiko-vit8b': MeanSlideEncoder,
-    'mean-kaiko-vit16b': MeanSlideEncoder,
-    'mean-kaiko-vit14l': MeanSlideEncoder,
+    "mean-conch_v1": MeanSlideEncoder,
+    "mean-conch_v15": MeanSlideEncoder,
+    "mean-uni_v1": MeanSlideEncoder,
+    "mean-uni_v2": MeanSlideEncoder,
+    "mean-ctranspath": MeanSlideEncoder,
+    "mean-phikon": MeanSlideEncoder,
+    "mean-resnet50": MeanSlideEncoder,
+    "mean-gigapath": MeanSlideEncoder,
+    "mean-gigapath-flash": MeanSlideEncoder,
+    "mean-virchow": MeanSlideEncoder,
+    "mean-virchow2": MeanSlideEncoder,
+    "mean-virchow2-cls": MeanSlideEncoder,
+    "mean-hoptimus0": MeanSlideEncoder,
+    "mean-phikon_v2": MeanSlideEncoder,
+    "mean-phaet": MeanSlideEncoder,
+    "mean-mascaret": MeanSlideEncoder,
+    "mean-musk": MeanSlideEncoder,
+    "mean-hibou_l": MeanSlideEncoder,
+    "mean-kaiko-vit8s": MeanSlideEncoder,
+    "mean-kaiko-vit16s": MeanSlideEncoder,
+    "mean-kaiko-vit8b": MeanSlideEncoder,
+    "mean-kaiko-vit16b": MeanSlideEncoder,
+    "mean-kaiko-vit14l": MeanSlideEncoder,
 }

@@ -7,7 +7,6 @@ from trident.wsi_objects.WSI import WSI, ReadMode
 
 
 class ImageWSI(WSI):
-
     def __init__(self, slide_path, **kwargs) -> None:
         """
         Initialize a WSI object from a standard image file (e.g., PNG, JPEG, etc.).
@@ -22,14 +21,26 @@ class ImageWSI(WSI):
             lazy_init (bool, default=True):
                 Whether to defer initialization until the WSI is accessed.
 
+        Raises:
+            ValueError:
+                If the required 'mpp' argument is not provided.
+
         Example
         -------
         >>> wsi = ImageWSI("path/to/image.png", lazy_init=False, mpp=0.51)
         >>> print(wsi)
         <width=5120, height=3840, backend=ImageWSI, mpp=0.51, mag=20>
         """
-        #enable loading large images.
+        mpp = kwargs.get("mpp")
+        if mpp is None:
+            raise ValueError(
+                "Missing required argument `mpp`. Standard image formats do not contain microns-per-pixel "
+                "information, so you must specify it manually via the `ImageWSI` constructor."
+            )
+
+        # enable loading large images.
         from PIL import PngImagePlugin
+
         PngImagePlugin.MAX_TEXT_CHUNK = 2**30  # ~1GB
         PngImagePlugin.MAX_TEXT_MEMORY = 2**30
         PngImagePlugin.MAX_IMAGE_PIXELS = None  # Optional: disables large image warning
@@ -67,15 +78,6 @@ class ImageWSI(WSI):
         if not self._initialized:
             try:
                 self._ensure_image_open()
-                if self.mpp is None:
-                    self.mpp = self._fetch_mpp(self.custom_mpp_keys)
-                if self.mpp is None and self.default_mpp is not None:
-                    self.mpp = round(float(self.default_mpp), 4)
-                if self.mpp is None:
-                    raise ValueError(
-                        "Unable to determine `mpp` for image input. Provide `mpp` explicitly, "
-                        "store it in config/CSV, or use an input image with readable DPI metadata."
-                    )
                 self.level_downsamples = [1]
                 self.dimensions = (self.img.width, self.img.height)
                 self.width, self.height = self.dimensions[0], self.dimensions[1]
@@ -89,62 +91,12 @@ class ImageWSI(WSI):
                 raise Exception(f"Error initializing WSI with PIL.Image: {e}")
 
     def _ensure_image_open(self):
+        """Ensure image open."""
         if self.img is None:
             self.img = Image.open(self.slide_path).convert("RGB")
 
-    def _fetch_mpp(self, custom_mpp_keys: List[str] | None = None) -> float | None:
-        """
-        Recover MPP for standard image files.
-
-        Priority:
-        1. Explicit custom metadata keys from PIL `Image.info`
-        2. Common hand-authored MPP keys in `Image.info`
-        3. DPI-style metadata (PNG/JPEG/TIFF via Pillow)
-        """
-        self._ensure_image_open()
-
-        info = getattr(self.img, "info", {}) or {}
-        candidate_keys = list(custom_mpp_keys or []) + [
-            "mpp",
-            "MPP",
-            "microns_per_pixel",
-            "microns-per-pixel",
-            "um_per_px",
-            "um-per-px",
-        ]
-
-        for key in candidate_keys:
-            if key in info:
-                try:
-                    return round(float(info[key]), 4)
-                except (TypeError, ValueError):
-                    continue
-
-        dpi = info.get("dpi")
-        if isinstance(dpi, tuple) and len(dpi) >= 1:
-            try:
-                dpi_x = float(dpi[0])
-                if dpi_x > 0:
-                    return round(25400.0 / dpi_x, 4)
-            except (TypeError, ValueError, ZeroDivisionError):
-                pass
-
-        jfif_density = info.get("jfif_density")
-        jfif_unit = info.get("jfif_unit")
-        if isinstance(jfif_density, tuple) and len(jfif_density) >= 1:
-            try:
-                density_x = float(jfif_density[0])
-                if density_x > 0:
-                    if jfif_unit == 1:  # pixels per inch
-                        return round(25400.0 / density_x, 4)
-                    if jfif_unit == 2:  # pixels per cm
-                        return round(10000.0 / density_x, 4)
-            except (TypeError, ValueError, ZeroDivisionError):
-                pass
-
-        return None
-
     def get_dimensions(self):
+        """Get dimensions."""
         return self.dimensions
 
     def get_thumbnail(self, size):
@@ -168,7 +120,7 @@ class ImageWSI(WSI):
         location: Tuple[int, int],
         level: int,
         size: Tuple[int, int],
-        read_as: ReadMode = 'pil',
+        read_as: ReadMode = "pil",
     ) -> Union[Image.Image, np.ndarray]:
         """
         Extract a specific region from a single-resolution image (e.g., JPEG, PNG, TIFF).
@@ -202,41 +154,43 @@ class ImageWSI(WSI):
             raise ValueError("ImageWSI only supports reading at level=0 (no pyramid levels).")
 
         self._ensure_image_open()
-        region = self.img.crop((
-            location[0],
-            location[1],
-            location[0] + size[0],
-            location[1] + size[1]
-        )).convert('RGB')
+        region = self.img.crop(
+            (location[0], location[1], location[0] + size[0], location[1] + size[1])
+        ).convert("RGB")
 
-        if read_as == 'pil':
+        if read_as == "pil":
             return region
-        elif read_as == 'numpy':
+        elif read_as == "numpy":
             return np.array(region)
         else:
             raise ValueError(f"Invalid `read_as` value: {read_as}. Must be 'pil' or 'numpy'.")
 
     def segment_tissue(self, *args, **kwargs):
+        """Segment tissue."""
         out = super().segment_tissue(*args, **kwargs)
         self.close()
         return out
-    
+
     def extract_tissue_coords(self, *args, **kwargs):
+        """Extract tissue coords."""
         out = super().extract_tissue_coords(*args, **kwargs)
         self.close()
         return out
 
     def visualize_coords(self, *args, **kwargs):
+        """Visualize coords."""
         out = super().visualize_coords(*args, **kwargs)
         self.close()
         return out
 
     def extract_patch_features(self, *args, **kwargs):
+        """Extract patch features."""
         out = super().extract_patch_features(*args, **kwargs)
         self.close()
         return out
 
     def extract_slide_features(self, *args, **kwargs):
+        """Extract slide features."""
         out = super().extract_slide_features(*args, **kwargs)
         self.close()
         return out

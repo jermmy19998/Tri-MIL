@@ -6,6 +6,7 @@ import torch.nn.functional as F
 
 
 def initialize_weights(module):
+    """Initialize weights."""
     for m in module.modules():
         if isinstance(m, nn.Linear):
             nn.init.xavier_normal_(m.weight)
@@ -17,6 +18,7 @@ def initialize_weights(module):
 
 
 def compute_theta_from_local_k(decay_type, local_k, decay_clip):
+    """Compute theta from local k."""
     decay_clip = torch.tensor(decay_clip, dtype=torch.float32)
     local_k = torch.tensor(local_k, dtype=torch.float32)
     if decay_type == "Gaussian":
@@ -29,6 +31,7 @@ def compute_theta_from_local_k(decay_type, local_k, decay_clip):
 
 
 def solve_for_local_k(decay_type, param, decay_clip):
+    """Solve for local k."""
     decay_clip = torch.tensor(decay_clip, dtype=param.dtype, device=param.device)
     if decay_type == "Gaussian":
         return torch.sqrt(-torch.log(decay_clip) * 2 * (param**2))
@@ -40,7 +43,16 @@ def solve_for_local_k(decay_type, param, decay_clip):
 
 
 class DecayNetwork(nn.Module):
-    def __init__(self, decay_type="Gaussian", num_heads=8, decay_clip=0.001, min_local_k=1, max_local_k=25, init_k=7):
+    def __init__(
+        self,
+        decay_type="Gaussian",
+        num_heads=8,
+        decay_clip=0.001,
+        min_local_k=1,
+        max_local_k=25,
+        init_k=7,
+    ):
+        """Initialize the DecayNetwork instance and configure its dependencies."""
         super().__init__()
         self.decay_type = decay_type
         self.decay_clip = decay_clip
@@ -54,6 +66,7 @@ class DecayNetwork(nn.Module):
         self.lambda_p = nn.Parameter(self.init_around_k(init_k, num_heads))
 
     def init_around_k(self, target_k, num_heads):
+        """Init around k."""
         low = compute_theta_from_local_k(self.decay_type, target_k - 1, self.decay_clip)
         high = compute_theta_from_local_k(self.decay_type, target_k + 1, self.decay_clip)
         theta_min = min(low, high)
@@ -66,19 +79,24 @@ class DecayNetwork(nn.Module):
         return torch.linspace(lambda_min, lambda_max, num_heads)
 
     def reparam(self, lambda_p):
+        """Reparam."""
         lambda_p = torch.clamp(lambda_p, min=0, max=1)
         return self.theta_min + lambda_p * (self.theta_max - self.theta_min)
 
     def get_params(self, param_str):
+        """Get params."""
         if param_str == "rates":
             return torch.clamp(self.lambda_p, min=0, max=1)
         if param_str == "thetas":
             return self.reparam(self.lambda_p)
         if param_str == "local_Ks":
-            return torch.round(solve_for_local_k(self.decay_type, self.reparam(self.lambda_p), self.decay_clip))
+            return torch.round(
+                solve_for_local_k(self.decay_type, self.reparam(self.lambda_p), self.decay_clip)
+            )
         raise ValueError(f"Unknown param_str: {param_str}")
 
     def forward(self, distance, head_ind):
+        """Compute the DecayNetwork forward pass for the supplied input tensors."""
         theta = self.reparam(self.lambda_p)[head_ind]
         if self.decay_type == "Gaussian":
             return torch.exp(-(distance**2) / (2 * theta**2))
@@ -91,6 +109,7 @@ class DecayNetwork(nn.Module):
 
 class ResidualBlock(nn.Module):
     def __init__(self, dim):
+        """Initialize the ResidualBlock instance and configure its dependencies."""
         super().__init__()
         self.block = nn.Sequential(
             nn.Linear(dim, dim, bias=False),
@@ -100,11 +119,13 @@ class ResidualBlock(nn.Module):
         )
 
     def forward(self, x):
+        """Compute the ResidualBlock forward pass for the supplied input tensors."""
         return x + self.block(x)
 
 
 class ResidualFullyConnected(nn.Module):
     def __init__(self, in_dim, out_dim, num_layers):
+        """Initialize the ResidualFullyConnected instance and configure its dependencies."""
         super().__init__()
         layers = [nn.Linear(in_dim, out_dim, bias=False), nn.ReLU(inplace=True)]
         for _ in range(max(0, num_layers - 1)):
@@ -112,6 +133,7 @@ class ResidualFullyConnected(nn.Module):
         self.layers = nn.Sequential(*layers)
 
     def forward(self, x):
+        """Compute the ResidualFullyConnected forward pass for the supplied input tensors."""
         return self.layers(x)
 
 
@@ -129,6 +151,7 @@ class SpatialAttention(nn.Module):
         max_local_k=25,
         init_k=7,
     ):
+        """Initialize the SpatialAttention instance and configure its dependencies."""
         super().__init__()
         if dim % num_heads != 0:
             raise ValueError(f"dim={dim} must be divisible by num_heads={num_heads}")
@@ -141,10 +164,13 @@ class SpatialAttention(nn.Module):
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
-        self.decay_nn = DecayNetwork(decay_type, num_heads, decay_clip, min_local_k, max_local_k, init_k)
+        self.decay_nn = DecayNetwork(
+            decay_type, num_heads, decay_clip, min_local_k, max_local_k, init_k
+        )
         self.last_attn = None
 
     def forward(self, x, distance, indices):
+        """Compute the SpatialAttention forward pass for the supplied input tensors."""
         b, n, c = x.shape
         qkv = self.qkv(x).reshape(b, n, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
         q, k, v = qkv.unbind(0)
@@ -154,7 +180,11 @@ class SpatialAttention(nn.Module):
         out = torch.zeros_like(q)
         q_norm_sq = torch.sum(q**2, dim=-1, keepdim=True)
         k_norm_sq = torch.sum(k**2, dim=-1)
-        local_k = solve_for_local_k(self.decay_nn.decay_type, self.decay_nn.reparam(self.decay_nn.lambda_p), self.decay_nn.decay_clip)
+        local_k = solve_for_local_k(
+            self.decay_nn.decay_type,
+            self.decay_nn.reparam(self.decay_nn.lambda_p),
+            self.decay_nn.decay_clip,
+        )
         num_elements = torch.round(math.pi * local_k**2).long().clamp(min=1, max=n)
         batch_idx = torch.arange(b, device=x.device).view(b, 1, 1)
         cls_patch_attn = []
@@ -206,6 +236,7 @@ class SpatialBlock(nn.Module):
         max_local_k=25,
         init_k=7,
     ):
+        """Initialize the SpatialBlock instance and configure its dependencies."""
         super().__init__()
         self.norm1 = nn.LayerNorm(dim)
         self.attn = SpatialAttention(
@@ -230,6 +261,7 @@ class SpatialBlock(nn.Module):
         )
 
     def forward(self, x, distance, indices):
+        """Compute the SpatialBlock forward pass for the supplied input tensors."""
         x = x + self.attn(self.norm1(x), distance, indices)
         x = x + self.mlp(self.norm2(x))
         return x
@@ -279,6 +311,7 @@ class PSA_MIL(nn.Module):
         eval_sampling="uniform",
         act=None,
     ):
+        """Initialize the PSA_MIL instance and configure its dependencies."""
         super().__init__()
         del act
         self.in_dim = in_dim
@@ -321,12 +354,14 @@ class PSA_MIL(nn.Module):
         self.apply(initialize_weights)
 
     def _pseudo_coords(self, n, device, dtype):
+        """Pseudo coords."""
         side = int(math.ceil(math.sqrt(n)))
         y = torch.arange(side, device=device, dtype=dtype).repeat_interleave(side)
         x = torch.arange(side, device=device, dtype=dtype).repeat(side)
         return torch.stack([x, y], dim=-1)[:n]
 
     def _split_features_coords(self, x, coords=None):
+        """Split features coords."""
         if x.dim() == 2:
             x = x.unsqueeze(0)
         if coords is not None:
@@ -335,10 +370,15 @@ class PSA_MIL(nn.Module):
             return x[..., : self.in_dim], coords.float()
         if x.shape[-1] == self.in_dim + 2:
             return x[..., : self.in_dim], x[..., self.in_dim : self.in_dim + 2].float()
-        coords = self._pseudo_coords(x.shape[1], x.device, x.dtype).unsqueeze(0).expand(x.shape[0], -1, -1)
+        coords = (
+            self._pseudo_coords(x.shape[1], x.device, x.dtype)
+            .unsqueeze(0)
+            .expand(x.shape[0], -1, -1)
+        )
         return x[..., : self.in_dim], coords
 
     def _sample_instances(self, x, coords):
+        """Sample instances."""
         n = x.shape[1]
         if self.max_instances is None or self.max_instances <= 0 or n <= self.max_instances:
             return x, coords, None, n
@@ -355,6 +395,7 @@ class PSA_MIL(nn.Module):
         return x.index_select(1, idx), coords.index_select(1, idx), idx, n
 
     def _build_distance_inputs(self, coords):
+        """Build distance inputs."""
         distance = torch.cdist(coords.float(), coords.float(), p=2)
         positive = distance[distance > 0]
         if positive.numel() > 0:
@@ -363,6 +404,7 @@ class PSA_MIL(nn.Module):
         return distance, indices
 
     def forward(self, x, coords=None, return_WSI_attn=False, return_WSI_feature=False):
+        """Compute the PSA_MIL forward pass for the supplied input tensors."""
         forward_return = {}
         x, coords = self._split_features_coords(x, coords)
         x, coords, sampled_idx, original_n = self._sample_instances(x, coords)
@@ -373,7 +415,9 @@ class PSA_MIL(nn.Module):
             patch_idx = torch.randperm(h.shape[1], device=h.device)[:keep]
             h = h[:, patch_idx]
             coords = coords[:, patch_idx]
-            sampled_idx = patch_idx if sampled_idx is None else sampled_idx.index_select(0, patch_idx)
+            sampled_idx = (
+                patch_idx if sampled_idx is None else sampled_idx.index_select(0, patch_idx)
+            )
 
         if self.pool_type == "cls_token":
             cls_tokens = self.cls_token.expand(h.shape[0], -1, -1).to(h.device)
@@ -407,7 +451,9 @@ class PSA_MIL(nn.Module):
                 patch_tokens = h[:, 1:] if self.pool_type == "cls_token" else h
                 attn = torch.einsum("bnc,bc->bn", patch_tokens, slide_feature)
             if sampled_idx is not None:
-                full_attn = torch.zeros(attn.shape[0], original_n, device=attn.device, dtype=attn.dtype)
+                full_attn = torch.zeros(
+                    attn.shape[0], original_n, device=attn.device, dtype=attn.dtype
+                )
                 full_attn.index_copy_(1, sampled_idx, attn)
                 attn = full_attn
             forward_return["WSI_attn"] = attn.squeeze(0).unsqueeze(-1)

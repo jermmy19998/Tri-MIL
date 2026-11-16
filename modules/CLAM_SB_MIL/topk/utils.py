@@ -9,11 +9,10 @@ def delta(y, labels, alpha=None):
     Compute zero-one loss matrix for a vector of ground truth y
     """
 
-
     labels = labels.to(y.device)
     if isinstance(y, ag.Variable):
         labels = ag.Variable(labels, requires_grad=False)
-    
+
     delta = torch.ne(y[:, None], labels[None, :]).float()
 
     if alpha is not None:
@@ -22,6 +21,7 @@ def delta(y, labels, alpha=None):
 
 
 def split(x, y, labels):
+    """Split."""
     labels = ag.Variable(labels, requires_grad=False)
     mask = torch.ne(labels[None, :], y[:, None])
 
@@ -34,6 +34,7 @@ def split(x, y, labels):
 
 
 def detect_large(x, k, tau, thresh):
+    """Detect large."""
     top, _ = x.topk(k + 1, 1)
     # switch to hard top-k if (k+1)-largest element is much smaller
     # than k-largest element

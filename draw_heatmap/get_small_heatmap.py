@@ -1,6 +1,7 @@
 from PIL import Image
 import os
-Image.MAX_IMAGE_PIXELS = None 
+
+Image.MAX_IMAGE_PIXELS = None
 # Input and output paths
 img_paths = [
     "/mnt/raid/zanzhuheng/working/sheep/heatmap_viz/out_H2_merged_pyramid/heatmap_phikon_v2_CLAM_MB_MIL_N-OPA.png",

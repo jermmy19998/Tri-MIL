@@ -6,7 +6,6 @@ from typing import List, Callable, Any
 from queue import Queue
 
 
-
 def cache_batch(wsis: List[str], dest_dir: str) -> List[str]:
     """
     Copies WSIs to a local cache directory. Handles .mrxs subdirectories if present.
@@ -28,7 +27,7 @@ def cache_batch(wsis: List[str], dest_dir: str) -> List[str]:
         shutil.copy(wsi, dest_path)
         copied.append(dest_path)
 
-        if wsi.endswith('.mrxs'):
+        if wsi.endswith(".mrxs"):
             mrxs_dir = os.path.splitext(wsi)[0]
             if os.path.exists(mrxs_dir):
                 dest_mrxs_dir = os.path.join(dest_dir, os.path.basename(mrxs_dir))
@@ -60,7 +59,7 @@ def batch_producer(
             Root directory where batches will be cached.
     """
     for i in range(start_idx, len(valid_slides), batch_size):
-        batch_paths = valid_slides[i:i + batch_size]
+        batch_paths = valid_slides[i : i + batch_size]
         batch_id = i // batch_size
         ssd_batch_dir = os.path.join(cache_dir, f"batch_{batch_id}")
         print(f"[PRODUCER] Caching batch {batch_id}: {ssd_batch_dir}")
@@ -105,8 +104,8 @@ def batch_consumer(
         processor = processor_factory(ssd_batch_dir)
 
         try:
-            if task == 'all':
-                for subtask in ['seg', 'coords', 'feat']:
+            if task == "all":
+                for subtask in ["seg", "coords", "feat"]:
                     run_task_fn(processor, subtask)
             else:
                 run_task_fn(processor, task)

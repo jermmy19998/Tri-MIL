@@ -31,8 +31,10 @@ import pdb
 
 
 class ConvStem(nn.Module):
-
-    def __init__(self, img_size=224, patch_size=4, in_chans=3, embed_dim=768, norm_layer=None, flatten=True):
+    def __init__(
+        self, img_size=224, patch_size=4, in_chans=3, embed_dim=768, norm_layer=None, flatten=True
+    ):
+        """Initialize the ConvStem instance and configure its dependencies."""
         super().__init__()
 
         assert patch_size == 4
@@ -46,11 +48,12 @@ class ConvStem(nn.Module):
         self.num_patches = self.grid_size[0] * self.grid_size[1]
         self.flatten = flatten
 
-
         stem = []
         input_dim, output_dim = 3, embed_dim // 8
         for l in range(2):
-            stem.append(nn.Conv2d(input_dim, output_dim, kernel_size=3, stride=2, padding=1, bias=False))
+            stem.append(
+                nn.Conv2d(input_dim, output_dim, kernel_size=3, stride=2, padding=1, bias=False)
+            )
             stem.append(nn.BatchNorm2d(output_dim))
             stem.append(nn.ReLU(inplace=True))
             input_dim = output_dim
@@ -61,6 +64,7 @@ class ConvStem(nn.Module):
         self.norm = norm_layer(embed_dim) if norm_layer else nn.Identity()
 
     def forward(self, x):
+        """Compute the ConvStem forward pass for the supplied input tensors."""
         B, C, H, W = x.shape
         # assert H == self.img_size[0] and W == self.img_size[1], \
         #     f"Input image size ({H}*{W}) doesn't match model ({self.img_size[0]}*{self.img_size[1]})."
@@ -70,10 +74,14 @@ class ConvStem(nn.Module):
         x = self.norm(x)
         return x
 
-def ctranspath(img_size = 224, **kwargs):
-    model = ctp_create_model('swin_tiny_patch4_window7_224', 
-                                  embed_layer=ConvStem, 
-                                  pretrained=False,
-                                  img_size=img_size,
-                                  **kwargs)
+
+def ctranspath(img_size=224, **kwargs):
+    """Ctranspath."""
+    model = ctp_create_model(
+        "swin_tiny_patch4_window7_224",
+        embed_layer=ConvStem,
+        pretrained=False,
+        img_size=img_size,
+        **kwargs,
+    )
     return model

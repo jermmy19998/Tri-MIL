@@ -7,6 +7,7 @@ from trident import __version__
 
 
 def main() -> None:
+    """Run the command-line workflow defined by this module."""
     parser = argparse.ArgumentParser(
         prog="trident",
         description="TRIDENT command-line interface.",
@@ -23,30 +24,46 @@ def main() -> None:
         "batch",
         help="Run batch slide processing (wrapper around run_batch_of_slides).",
     )
-    batch.add_argument("args", nargs=argparse.REMAINDER, help="Arguments forwarded to run_batch_of_slides.")
+    batch.add_argument(
+        "args", nargs=argparse.REMAINDER, help="Arguments forwarded to run_batch_of_slides."
+    )
 
     single = subparsers.add_parser(
         "single",
         help="Run single slide processing (wrapper around run_single_slide).",
     )
-    single.add_argument("args", nargs=argparse.REMAINDER, help="Arguments forwarded to run_single_slide.")
+    single.add_argument(
+        "args", nargs=argparse.REMAINDER, help="Arguments forwarded to run_single_slide."
+    )
 
     doctor = subparsers.add_parser(
         "doctor",
         help="Run environment diagnostics (wrapper around trident-doctor).",
     )
-    doctor.add_argument("args", nargs=argparse.REMAINDER, help="Arguments forwarded to trident-doctor.")
+    doctor.add_argument(
+        "args", nargs=argparse.REMAINDER, help="Arguments forwarded to trident-doctor."
+    )
 
     convert = subparsers.add_parser(
         "convert",
         help="Convert images/WSIs to pyramidal TIFF with AnyToTiffConverter.",
     )
-    convert.add_argument("--input_dir", type=str, required=True, help="Directory containing files to convert.")
-    convert.add_argument("--mpp_csv", type=str, required=True, help="Required CSV with columns: wsi,mpp.")
-    convert.add_argument("--job_dir", type=str, required=True, help="Output directory for converted TIFF files.")
+    convert.add_argument(
+        "--input_dir", type=str, required=True, help="Directory containing files to convert."
+    )
+    convert.add_argument(
+        "--mpp_csv", type=str, required=True, help="Required CSV with columns: wsi,mpp."
+    )
+    convert.add_argument(
+        "--job_dir", type=str, required=True, help="Output directory for converted TIFF files."
+    )
     convert.add_argument("--downscale_by", type=int, default=1, help="Downscale factor (>=1).")
-    convert.add_argument("--num_workers", type=int, default=1, help="Workers: 1=sequential, 0=all CPUs.")
-    convert.add_argument("--bigtiff", action="store_true", default=False, help="Enable BigTIFF output.")
+    convert.add_argument(
+        "--num_workers", type=int, default=1, help="Workers: 1=sequential, 0=all CPUs."
+    )
+    convert.add_argument(
+        "--bigtiff", action="store_true", default=False, help="Enable BigTIFF output."
+    )
 
     parsed = parser.parse_args()
 

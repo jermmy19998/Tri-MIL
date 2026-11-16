@@ -20,6 +20,63 @@ Tri-MIL is a computational pathology project developed by merging and extending 
 Tri-MIL does not simply place the two projects side by side.  
 Its goal is to turn them into one practical workflow for weakly supervised whole-slide learning: from raw slides, to features, to MIL experiments, to visualization.
 
+## 0.4.0 update
+
+- **8 new MIL models:** `AS_MIL`, `ATTRI_MIL`, `CAR_MIL`, `FC_MIL`, `LIN_MIL`,
+  `MR_AB_MIL`, `NN_MIL`, and `PNEA_MIL`, with model YAMLs and training routines.
+- **TRIDENT 0.3.2:** configurable encoder input resolution, GigaPath Flash,
+  Virchow2 CLS, Phaet and Mascaret encoders, BioIO conversion, and updated WSI
+  processing/state handling. The existing ViT-S encoder remains available.
+- **Survival prediction:** full-cohort Cox loss, right censoring, validation
+  C-index checkpoint selection, and unlabeled risk prediction through the same
+  training, validation and inference entrypoints.
+- Case-level splits are available in `split_by_case/`; function docstrings,
+  Ruff formatting and regression tests cover the integrated Python sources.
+
+Upstreams were synchronized from the supplied local snapshots on 2026-11-16.
+See [changelog](./CHANGELOG.md), [input hashes](./docs/upstream-sync.json), and
+[survival guide / 生存预测说明](./docs/survival.md) for scope and limitations.
+
+### Survival quick start
+
+Prepare a manifest containing `slide_path,time,event,case_id`. `event=1` means
+observed event; `event=0` means right censoring. Feature paths refer to PT/HDF5
+bags. Cases stay together when splitting:
+
+```bash
+python prepare_survival_csv.py --manifest ./datasets/survival_manifest.csv --output ./datasets/survival_splits.csv
+# Edit feature dimension and paths in the two SURVIVAL YAMLs first.
+python train_mil.py --yaml_path ./configs/SURVIVAL_PIPELINE.yaml
+python valid_mil.py --yaml_path ./configs/SURVIVAL_PIPELINE.yaml
+python infer_mil.py --yaml_path ./configs/SURVIVAL_PIPELINE.yaml
+```
+
+Use [SURVIVAL_AB_MIL.yaml](./configs/SURVIVAL_AB_MIL.yaml) and
+[SURVIVAL_PIPELINE.yaml](./configs/SURVIVAL_PIPELINE.yaml). Split CSVs contain
+`train_slide_path,train_time,train_event` and equivalent `val_` / `test_` columns.
+Prediction needs only paths. Larger output `risk` means higher hazard.
+C-index gives tied risks half credit; no comparable pairs yields JSON `null`.
+The exact full-cohort Cox computation retains all training-bag graphs until
+backward, so memory scales with cohort size. Use one bag per patient for
+patient-level survival. Specialized multi-stage/coordinate backbones require
+additional adapters; see the guide for supported interfaces.
+
+### Development checks
+
+Python 3.10–3.12 is supported. For core tests without downloading model weights:
+
+```bash
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+pip install -r requirements-test.txt
+python -m pytest -q
+python tools/document_functions.py
+ruff check .
+ruff format --check .
+```
+
+Full WSI processing and pretrained-encoder validation additionally require the
+native reader dependencies, accessible weights, and representative slide data.
+
 ## Tri-MIL in One View
 
 | Part | Purpose | Main paths |
@@ -120,12 +177,12 @@ pip install -e .
 
 Tri-MIL now supports one pipeline YAML for `train_mil.py`, `valid_mil.py`, `infer_mil.py`, and `draw_heatmap.py`.
 
-Use [configs/TRI_MIL_PIPELINE.yaml](D:/Desktop/Tri-MIL/configs/TRI_MIL_PIPELINE.yaml) as the shared entrypoint:
+Use [configs/TRI_MIL_PIPELINE.yaml](./configs/TRI_MIL_PIPELINE.yaml) as the shared entrypoint:
 
 ```bash
 python train_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
 python valid_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
-python infer_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml --no_label
+python infer_mil.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
 python draw_heatmap.py --yaml_path ./configs/TRI_MIL_PIPELINE.yaml
 ```
 

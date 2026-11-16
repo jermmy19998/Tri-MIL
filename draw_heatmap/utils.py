@@ -1,14 +1,21 @@
-import shutil 
+import shutil
+import sys
+import time
 
 
 # -----------------------------
 # Flash message
 # -----------------------------
 def flash_message(text, fg="black", bg="red", times=2, interval=0.25, bold=True):
+    """Flash message."""
     term_width = shutil.get_terminal_size().columns
     fg_codes = {
-        "black": "30", "red": "31", "green": "32",
-        "yellow": "33", "blue": "34", "white": "37",
+        "black": "30",
+        "red": "31",
+        "green": "32",
+        "yellow": "33",
+        "blue": "34",
+        "white": "37",
     }
     bg_codes = {"red": "41", "green": "42", "yellow": "43", "blue": "44"}
     style = ["1"] if bold else []

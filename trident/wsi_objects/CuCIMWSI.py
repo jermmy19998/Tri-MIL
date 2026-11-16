@@ -7,7 +7,6 @@ from trident.wsi_objects.WSI import WSI, ReadMode
 
 
 class CuCIMWSI(WSI):
-
     def __init__(self, slide_path: str, **kwargs: Any) -> None:
         """
         Initialize a WSI instance using CuCIM as a backend.
@@ -19,7 +18,7 @@ class CuCIMWSI(WSI):
                 Keyword arguments forwarded to the base `WSI` class. Most important key is:
                 - lazy_init (bool, default=True): Whether to defer loading WSI and metadata.
 
-        Please refer to WSI constructor for all parameters. 
+        Please refer to WSI constructor for all parameters.
 
         Example
         -------
@@ -76,11 +75,14 @@ class CuCIMWSI(WSI):
         if not self._initialized:
             try:
                 self.img = CuImage(self.slide_path)
-                self.dimensions = (self.img.size()[1], self.img.size()[0])  # width, height are reverted compared to openslide!!
+                self.dimensions = (
+                    self.img.size()[1],
+                    self.img.size()[0],
+                )  # width, height are reverted compared to openslide!!
                 self.width, self.height = self.dimensions
-                self.level_count = self.img.resolutions['level_count']
-                self.level_downsamples = self.img.resolutions['level_downsamples']
-                self.level_dimensions = self.img.resolutions['level_dimensions']
+                self.level_count = self.img.resolutions["level_count"]
+                self.level_downsamples = self.img.resolutions["level_downsamples"]
+                self.level_dimensions = self.img.resolutions["level_dimensions"]
                 self.properties = self.img.metadata
                 if self.mpp is None:
                     self.mpp = self._fetch_mpp(self.custom_mpp_keys)
@@ -108,6 +110,7 @@ class CuCIMWSI(WSI):
         import json
 
         def try_parse(val):
+            """Try parse."""
             try:
                 return float(val)
             except:
@@ -120,31 +123,39 @@ class CuCIMWSI(WSI):
 
         # Flatten nested CuCIM metadata for convenience
         flat_meta = {}
-        def flatten(d, parent_key=''):
+
+        def flatten(d, parent_key=""):
+            """Flatten."""
             for k, v in d.items():
                 key = f"{parent_key}.{k}" if parent_key else k
                 if isinstance(v, dict):
                     flatten(v, key)
                 else:
                     flat_meta[key.lower()] = v
+
         flatten(metadata)
 
         # Check custom keys first if provided
         mpp_x = mpp_y = None
         if custom_keys:
-            if 'mpp_x' in custom_keys:
-                mpp_x = try_parse(flat_meta.get(custom_keys['mpp_x'].lower()))
-            if 'mpp_y' in custom_keys:
-                mpp_y = try_parse(flat_meta.get(custom_keys['mpp_y'].lower()))
+            if "mpp_x" in custom_keys:
+                mpp_x = try_parse(flat_meta.get(custom_keys["mpp_x"].lower()))
+            if "mpp_y" in custom_keys:
+                mpp_y = try_parse(flat_meta.get(custom_keys["mpp_y"].lower()))
 
         # Standard fallback keys used in SVS, NDPI, MRXS, etc.
         fallback_keys = [
-            'openslide.mpp-x', 'openslide.mpp-y',
-            'tiff.resolution-x', 'tiff.resolution-y',
-            'mpp', 'spacing', 'microns_per_pixel',
-            'aperio.mpp', 'hamamatsu.mpp',
-            'metadata.resolutions.level[0].spacing',
-            'metadata.resolutions.level[0].physical_size.0',
+            "openslide.mpp-x",
+            "openslide.mpp-y",
+            "tiff.resolution-x",
+            "tiff.resolution-y",
+            "mpp",
+            "spacing",
+            "microns_per_pixel",
+            "aperio.mpp",
+            "hamamatsu.mpp",
+            "metadata.resolutions.level[0].spacing",
+            "metadata.resolutions.level[0].physical_size.0",
         ]
 
         for key in fallback_keys:
@@ -163,7 +174,7 @@ class CuCIMWSI(WSI):
 
         if mpp_x is not None and mpp_y is not None:
             return float((mpp_x + mpp_y) / 2)
-        
+
         raise ValueError(
             f"Unable to extract MPP from CuCIM metadata for: '{self.slide_path}'.\n"
             "Suggestions:\n"
@@ -195,9 +206,7 @@ class CuCIMWSI(WSI):
 
         # Read region at (0, 0) in target level
         region = self.read_region(
-            location=(0, 0),
-            size=(level_width, level_height),
-            level=level
+            location=(0, 0), size=(level_width, level_height), level=level
         ).convert("RGB")
         # region = region.resize((size[1], size[0]), resample=Image.BILINEAR)
         region = region.resize(size, resample=Image.BILINEAR)
@@ -209,7 +218,7 @@ class CuCIMWSI(WSI):
         location: Tuple[int, int],
         level: int,
         size: Tuple[int, int],
-        read_as: ReadMode = 'pil',
+        read_as: ReadMode = "pil",
     ) -> Union[Image.Image, np.ndarray]:
         """
         Extract a specific region from the whole-slide image (WSI) using CuCIM.
@@ -238,13 +247,14 @@ class CuCIMWSI(WSI):
         >>> region = wsi.read_region((1000, 1000), level=0, size=(512, 512), read_as='pil')
         >>> region.show()
         """
-
-        region = self.img.read_region(location=location, level=level, size=size, device='cpu')
+        self._ensure_open()  # reopen the handle if this WSI is cold (e.g. unpickled in a worker)
+        region = self.img.read_region(location=location, level=level, size=size, device="cpu")
         # CuCIM returns NumPy arrays for CPU reads; keep a safe fallback
         # for unexpected array types without hard-requiring CuPy.
         if not isinstance(region, np.ndarray):
             try:
                 import cupy as cp
+
                 if isinstance(region, cp.ndarray):
                     region = cp.asnumpy(region)
                 else:
@@ -252,13 +262,13 @@ class CuCIMWSI(WSI):
             except ModuleNotFoundError:
                 region = np.asarray(region)
 
-        if read_as == 'numpy':
+        if read_as == "numpy":
             return region
-        elif read_as == 'pil':
+        elif read_as == "pil":
             return Image.fromarray(region).convert("RGB")
         else:
             raise ValueError(f"Invalid `read_as` value: {read_as}. Must be 'pil' or 'numpy'.")
-        
+
     def get_dimensions(self) -> Tuple[int, int]:
         """
         Return the (width, height) dimensions of the CuCIM-managed WSI.
@@ -274,31 +284,37 @@ class CuCIMWSI(WSI):
         return self.dimensions
 
     def segment_tissue(self, **kwargs) -> str:
+        """Segment tissue."""
         out = super().segment_tissue(**kwargs)
         self.close()
         return out
-    
+
     def extract_tissue_coords(self, **kwargs) -> str:
+        """Extract tissue coords."""
         out = super().extract_tissue_coords(**kwargs)
         self.close()
         return out
 
     def visualize_coords(self, **kwargs) -> str:
+        """Visualize coords."""
         out = super().visualize_coords(**kwargs)
         self.close()
         return out
 
     def extract_patch_features(self, **kwargs) -> str:
+        """Extract patch features."""
         out = super().extract_patch_features(**kwargs)
         self.close()
         return out
 
     def extract_slide_features(self, **kwargs) -> str:
+        """Extract slide features."""
         out = super().extract_slide_features(**kwargs)
         self.close()
         return out
 
     def close(self):
+        """Close."""
         if self.img is not None:
             self.img.close()
             self.img = None
