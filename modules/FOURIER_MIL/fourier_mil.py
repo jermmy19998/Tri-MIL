@@ -5,6 +5,7 @@ import torch.nn.functional as F
 
 
 def initialize_weights(module):
+    """Initialize weights."""
     for m in module.modules():
         if isinstance(m, nn.Linear):
             nn.init.xavier_normal_(m.weight)
@@ -26,6 +27,7 @@ class APFF(nn.Module):
         hidden_size_factor=1,
         drop=0.0,
     ):
+        """Initialize the APFF instance and configure its dependencies."""
         super().__init__()
         if dim % num_blocks != 0:
             raise ValueError(f"hidden_dim={dim} must be divisible by num_blocks={num_blocks}")
@@ -40,13 +42,18 @@ class APFF(nn.Module):
         self.scale = 0.02
 
         hidden = self.block_size * self.hidden_size_factor
-        self.w1 = nn.Parameter(self.scale * torch.randn(2, self.num_blocks, self.block_size, hidden))
+        self.w1 = nn.Parameter(
+            self.scale * torch.randn(2, self.num_blocks, self.block_size, hidden)
+        )
         self.b1 = nn.Parameter(self.scale * torch.randn(2, self.num_blocks, hidden))
-        self.w2 = nn.Parameter(self.scale * torch.randn(2, self.num_blocks, hidden, self.block_size))
+        self.w2 = nn.Parameter(
+            self.scale * torch.randn(2, self.num_blocks, hidden, self.block_size)
+        )
         self.b2 = nn.Parameter(self.scale * torch.randn(2, self.num_blocks, self.block_size))
         self.drop = nn.Dropout(drop)
 
     def forward(self, x):
+        """Compute the APFF forward pass for the supplied input tensors."""
         dtype = x.dtype
         x = x.float()
         b, n, c = x.shape
@@ -102,6 +109,7 @@ class APFF(nn.Module):
 
 class Mlp(nn.Module):
     def __init__(self, dim, mlp_ratio=1.0, drop=0.0):
+        """Initialize the Mlp instance and configure its dependencies."""
         super().__init__()
         hidden_dim = int(dim * mlp_ratio)
         self.fc1 = nn.Linear(dim, hidden_dim)
@@ -110,6 +118,7 @@ class Mlp(nn.Module):
         self.drop = nn.Dropout(drop)
 
     def forward(self, x):
+        """Compute the Mlp forward pass for the supplied input tensors."""
         x = self.drop(self.act(self.fc1(x)))
         x = self.drop(self.fc2(x))
         return x
@@ -127,6 +136,7 @@ class FourierBlock(nn.Module):
         mlp_ratio=1.0,
         drop=0.0,
     ):
+        """Initialize the FourierBlock instance and configure its dependencies."""
         super().__init__()
         self.norm = nn.LayerNorm(dim)
         self.attn = APFF(
@@ -142,6 +152,7 @@ class FourierBlock(nn.Module):
         self.mlp = Mlp(dim, mlp_ratio=mlp_ratio, drop=drop)
 
     def forward(self, x):
+        """Compute the FourierBlock forward pass for the supplied input tensors."""
         x = x + self.attn(self.norm(x))
         x = x + self.mlp(self.norm2(x))
         return x
@@ -178,6 +189,7 @@ class FOURIER_MIL(nn.Module):
         hidden_size_factor=1,
         mlp_ratio=1.0,
     ):
+        """Initialize the FOURIER_MIL instance and configure its dependencies."""
         super().__init__()
         self.in_dim = in_dim
         self.hidden_dim = hidden_dim
@@ -210,6 +222,7 @@ class FOURIER_MIL(nn.Module):
         self.apply(initialize_weights)
 
     def forward(self, x, return_WSI_attn=False, return_WSI_feature=False):
+        """Compute the FOURIER_MIL forward pass for the supplied input tensors."""
         forward_return = {}
         if x.dim() == 2:
             x = x.unsqueeze(0)

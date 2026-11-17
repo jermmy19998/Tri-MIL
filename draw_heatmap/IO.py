@@ -38,11 +38,11 @@ def collect_wsi_files(wsi_dirs, extensions):
     return sorted(wsi_files)
 
 
-
 # -----------------------------
 # Dict → Namespace
 # -----------------------------
 def dict_to_namespace(d):
+    """Dict to namespace."""
     if isinstance(d, dict):
         return SimpleNamespace(**{str(k): dict_to_namespace(v) for k, v in d.items()})
     elif isinstance(d, list):

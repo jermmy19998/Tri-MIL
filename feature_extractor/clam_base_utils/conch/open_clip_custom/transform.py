@@ -1,18 +1,29 @@
 from typing import Any, Dict, Optional, Sequence, Tuple, Union
 
-from torchvision.transforms import Normalize, Compose, RandomResizedCrop, InterpolationMode, ToTensor, Resize, \
-    CenterCrop
+from torchvision.transforms import (
+    Normalize,
+    Compose,
+    RandomResizedCrop,
+    InterpolationMode,
+    ToTensor,
+    Resize,
+    CenterCrop,
+)
 
 from .constants import IMAGENET_DATASET_MEAN, IMAGENET_DATASET_STD
 
+
 def _convert_to_rgb(image):
-    return image.convert('RGB')
+    """Convert to rgb."""
+    return image.convert("RGB")
+
 
 def image_transform(
-        image_size: int,
-        mean: Optional[Tuple[float, ...]] = None,
-        std: Optional[Tuple[float, ...]] = None
+    image_size: int,
+    mean: Optional[Tuple[float, ...]] = None,
+    std: Optional[Tuple[float, ...]] = None,
 ):
+    """Image transform."""
     mean = mean or IMAGENET_DATASET_MEAN
     if not isinstance(mean, (list, tuple)):
         mean = (mean,) * 3
@@ -31,9 +42,11 @@ def image_transform(
         Resize(image_size, interpolation=InterpolationMode.BICUBIC),
         CenterCrop(image_size),
     ]
-    transforms.extend([
-        _convert_to_rgb,
-        ToTensor(),
-        normalize,
-    ])
+    transforms.extend(
+        [
+            _convert_to_rgb,
+            ToTensor(),
+            normalize,
+        ]
+    )
     return Compose(transforms)

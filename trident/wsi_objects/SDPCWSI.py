@@ -6,7 +6,6 @@ from trident.wsi_objects.WSI import WSI, ReadMode
 
 
 class SDPCWSI(WSI):
-
     def __init__(self, slide_path, **kwargs) -> None:
         """
         Initialize an SDPCWSI instance.
@@ -18,7 +17,7 @@ class SDPCWSI(WSI):
                 Keyword arguments forwarded to the base `WSI` class. Most important key is:
                 - lazy_init (bool, default=True): Whether to defer loading WSI and metadata.
 
-        Please refer to WSI constructor for all parameters. 
+        Please refer to WSI constructor for all parameters.
 
         Example
         -------
@@ -58,8 +57,10 @@ class SDPCWSI(WSI):
         try:
             import opensdpc
         except ImportError:
-            raise ImportError("The opensdpc package is not installed. Please install it using `pip install opensdpc`.")
-        
+            raise ImportError(
+                "The opensdpc package is not installed. Please install it using `pip install opensdpc`."
+            )
+
         super()._lazy_initialize()
 
         if not self._initialized:
@@ -107,7 +108,7 @@ class SDPCWSI(WSI):
         location: Tuple[int, int],
         level: int,
         size: Tuple[int, int],
-        read_as: ReadMode = 'pil',
+        read_as: ReadMode = "pil",
     ) -> Union[Image.Image, np.ndarray]:
         """
         Extract a specific region from the whole-slide image (WSI).
@@ -137,11 +138,12 @@ class SDPCWSI(WSI):
         >>> print(region.shape)
         (512, 512, 3)
         """
-        region = self.img.read_region(location, level, size).convert('RGB')
+        self._ensure_open()  # reopen the handle if this WSI is cold (e.g. unpickled in a worker)
+        region = self.img.read_region(location, level, size).convert("RGB")
 
-        if read_as == 'pil':
+        if read_as == "pil":
             return region
-        elif read_as == 'numpy':
+        elif read_as == "numpy":
             return np.array(region)
         else:
             raise ValueError(f"Invalid `read_as` value: {read_as}. Must be 'pil', 'numpy'.")
@@ -168,6 +170,8 @@ class SDPCWSI(WSI):
         """
         closest_level = self._get_closed_thumbnail_level(size)
         level_width, level_height = self.level_dimensions[closest_level]
-        thumbnail = self.read_region((0, 0), closest_level, (level_width, level_height), read_as='pil')
+        thumbnail = self.read_region(
+            (0, 0), closest_level, (level_width, level_height), read_as="pil"
+        )
         thumbnail = thumbnail.resize(size, Image.LANCZOS)
         return thumbnail

@@ -1,0 +1,15 @@
+Common:
+  task: survival
+  model_yaml_path: ./configs/SURVIVAL_AB_MIL.yaml
+  dataset_csv_path: ./datasets/survival_splits.csv
+  model_weight_path: ./log_dir/survival/Best_survival.pth
+  device: auto
+Train:
+  output_dir: ./log_dir/survival
+  epochs: 30
+Valid:
+  split: test
+  output_dir: ./log_dir/survival/valid
+Infer:
+  split: test
+  output_dir: ./log_dir/survival/infer

@@ -9,24 +9,25 @@ from .grad import d_logS_d_expX
 
 class LogSumExp(nn.Module):
     def __init__(self, k, p=None, thresh=1e-5):
+        """Initialize the LogSumExp instance and configure its dependencies."""
         super(LogSumExp, self).__init__()
         self.k = k
         self.p = int(1 + 0.2 * k) if p is None else p
         self.mul = Multiplication(self.k + self.p - 1)
         self.thresh = thresh
 
-        self.register_buffer('grad_k', torch.Tensor(0))
-        self.register_buffer('grad_km1', torch.Tensor(0))
+        self.register_buffer("grad_k", torch.Tensor(0))
+        self.register_buffer("grad_km1", torch.Tensor(0))
 
         self.buffers = (self.grad_km1, self.grad_k)
 
     def forward(self, x):
+        """Compute the LogSumExp forward pass for the supplied input tensors."""
         f = LogSumExp_F()
         return f.apply(x, self.k, self.p, self.thresh, self.mul, self.buffers)
 
 
-class LogSumExp_F(ag.Function):        
-    
+class LogSumExp_F(ag.Function):
     @staticmethod
     def forward(self, x, k, p, thresh, mul, buffers):
         """
@@ -70,7 +71,7 @@ class LogSumExp_F(ag.Function):
         # save all coeff for backward
         self.saved_coeff = coeff
 
-        return coeff[self.k - 1: self.k + 1]
+        return coeff[self.k - 1 : self.k + 1]
 
     @staticmethod
     def backward(self, grad_sk):
@@ -81,7 +82,7 @@ class LogSumExp_F(ag.Function):
         """
 
         # tensors from forward pass
-        X, = self.saved_tensors
+        (X,) = self.saved_tensors
         S = self.saved_coeff
 
         # extend to shape (self.k + 1, n_samples, n_classes) for backward
@@ -108,6 +109,7 @@ def log_sum_exp(x):
 
 def log_sum_exp_k_autograd(x, k):
     # number of samples and number of coefficients to compute
+    """Log sum exp k autograd."""
     n_s = x.size(0)
 
     assert k <= x.size(1)
@@ -133,4 +135,4 @@ def log_sum_exp_k_autograd(x, k):
     # avoid broadcasting issues (in particular if n_s = 1)
     coeff = coeff.view(k + 1, n_s)
 
-    return coeff[k - 1: k + 1]
+    return coeff[k - 1 : k + 1]

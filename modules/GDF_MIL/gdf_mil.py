@@ -2,13 +2,17 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import SAGEConv
+
 try:
     from torch_geometric.nn.aggr import AttentionalAggregation
+
     GlobalAttention = AttentionalAggregation
 except ImportError:
     from torch_geometric.nn import GlobalAttention
 
+
 def initialize_weights(module):
+    """Initialize weights."""
     for m in module.modules():
         if isinstance(m, (nn.Conv2d, nn.Linear)):
             nn.init.xavier_normal_(m.weight)
@@ -24,8 +28,21 @@ class GDF_MIL(nn.Module):
     Graph-based Dynamic Feature MIL (GDF_MIL)
     Based on GDAMIL from GDF-MIL-AAAI26
     """
-    def __init__(self, in_dim=512, num_classes=2, hid_dim=256, out_dim=128, k_components=10, k_neighbors=10,
-                 dropout=0.1, lambda_smooth=0.0, lambda_nce=0.0, act='leaky_relu'):
+
+    def __init__(
+        self,
+        in_dim=512,
+        num_classes=2,
+        hid_dim=256,
+        out_dim=128,
+        k_components=10,
+        k_neighbors=10,
+        dropout=0.1,
+        lambda_smooth=0.0,
+        lambda_nce=0.0,
+        act="leaky_relu",
+    ):
+        """Initialize the GDF_MIL instance and configure its dependencies."""
         super().__init__()
 
         self.encoder = nn.Sequential(nn.Linear(in_dim, hid_dim), nn.LeakyReLU())
@@ -36,20 +53,17 @@ class GDF_MIL(nn.Module):
         # Use AttentionalAggregation for newer torch_geometric versions
         try:
             from torch_geometric.nn.aggr import AttentionalAggregation
+
             self.bag_embedding = AttentionalAggregation(
                 nn.Sequential(
-                    nn.Linear(out_dim, out_dim // 2),
-                    nn.LeakyReLU(),
-                    nn.Linear(out_dim // 2, 1)
+                    nn.Linear(out_dim, out_dim // 2), nn.LeakyReLU(), nn.Linear(out_dim // 2, 1)
                 )
             )
         except ImportError:
             # Fallback to GlobalAttention for older versions
             self.bag_embedding = GlobalAttention(
                 nn.Sequential(
-                    nn.Linear(out_dim, out_dim // 2),
-                    nn.LeakyReLU(),
-                    nn.Linear(out_dim // 2, 1)
+                    nn.Linear(out_dim, out_dim // 2), nn.LeakyReLU(), nn.Linear(out_dim // 2, 1)
                 )
             )
         self.lambda_smooth = lambda_smooth
@@ -60,20 +74,20 @@ class GDF_MIL(nn.Module):
             nn.Linear(out_dim, hid_dim),
             nn.LeakyReLU(),
             nn.Dropout(dropout),
-            nn.Linear(hid_dim, num_classes)
+            nn.Linear(hid_dim, num_classes),
         )
-        
+
         self.apply(initialize_weights)
 
     def forward(self, X, return_WSI_attn=False, return_WSI_feature=False):
         """
         Forward pass for GDF_MIL model
-        
+
         Args:
             X: input features [B, N, in_dim] or [N, in_dim] (will be unsqueezed)
             return_WSI_attn: whether to return attention weights
             return_WSI_feature: whether to return WSI-level features
-            
+
         Returns:
             forward_return: dictionary containing:
                 - 'logits': classification logits
@@ -81,11 +95,11 @@ class GDF_MIL(nn.Module):
                 - 'WSI_feature': WSI-level features (if return_WSI_feature=True)
         """
         forward_return = {}
-        
+
         # Handle input shape: if 2D, add batch dimension
         if len(X.shape) == 2:
             X = X.unsqueeze(0)
-        
+
         X = self.encoder(X)
         X_soft = self.bag_partition(X)
 
@@ -98,21 +112,23 @@ class GDF_MIL(nn.Module):
         b = self.feature_fusion(b_gnn, b_basic)
 
         logits = self.classifier(b)
-        
-        forward_return['logits'] = logits
-        
+
+        forward_return["logits"] = logits
+
         if return_WSI_attn:
-            forward_return['WSI_attn'] = A
-        
+            forward_return["WSI_attn"] = A
+
         if return_WSI_feature:
-            forward_return['WSI_feature'] = b
+            forward_return["WSI_feature"] = b
 
         return forward_return
 
 
 class BagPartition(nn.Module):
     """Bag Partition module using Gumbel Softmax for soft clustering"""
+
     def __init__(self, in_dim=512, hid_dim=512, out_dim=128, k_components=10):
+        """Initialize the BagPartition instance and configure its dependencies."""
         super().__init__()
 
         self.k_components = k_components
@@ -120,6 +136,7 @@ class BagPartition(nn.Module):
         self.cluster_logits = nn.Linear(in_dim, k_components)
 
     def forward(self, X):
+        """Compute the BagPartition forward pass for the supplied input tensors."""
         X = X.squeeze(0)
         assert len(X.shape) == 2
         P = F.gumbel_softmax(self.cluster_logits(X), tau=0.5, hard=False)
@@ -130,15 +147,18 @@ class BagPartition(nn.Module):
 
 class DynamicGraphBuilder(nn.Module):
     """Dynamic Graph Builder for constructing graph structure"""
+
     def __init__(self, dim, topk=10):
+        """Initialize the DynamicGraphBuilder instance and configure its dependencies."""
         super().__init__()
         self.W_head = nn.Linear(dim, dim)
         self.W_tail = nn.Linear(dim, dim)
-        self.scale = dim ** -0.5
+        self.scale = dim**-0.5
         self.topk = topk
 
     def forward(self, X):
         # n: The number of instances in the new bag
+        """Compute the DynamicGraphBuilder forward pass for the supplied input tensors."""
         e_h = self.W_head(X)  # n x 512
         e_t = self.W_tail(X)  # n x 512
         logits = (e_h @ e_t.T) * self.scale  # n x n
@@ -158,7 +178,9 @@ class DynamicGraphBuilder(nn.Module):
 
 class GraphAttention(nn.Module):
     """Graph Attention Network module"""
+
     def __init__(self, in_dim, in_channels, num_layers=1, k_neighbors=10):
+        """Initialize the GraphAttention instance and configure its dependencies."""
         super().__init__()
 
         self.convs_list = nn.ModuleList()
@@ -176,6 +198,7 @@ class GraphAttention(nn.Module):
         self.norm = nn.LayerNorm(in_channels)
 
     def forward(self, X):
+        """Compute the GraphAttention forward pass for the supplied input tensors."""
         edge_index, edge_weight = self.graph_builder(X)
 
         for conv in self.convs_list:
@@ -183,7 +206,9 @@ class GraphAttention(nn.Module):
 
         row, col = edge_index
         # summed = Σ_j w_ij * X[j]
-        summed = torch.zeros_like(X).index_add_(0, row, X[col] * edge_weight.unsqueeze(1))  # n x 128
+        summed = torch.zeros_like(X).index_add_(
+            0, row, X[col] * edge_weight.unsqueeze(1)
+        )  # n x 128
         sum_msg = self.lin_sum(X + summed)
         bi_msg = self.lin_bi(X * summed)
 
@@ -199,19 +224,16 @@ class GraphAttention(nn.Module):
 
 class FeatureFusion(nn.Module):
     """Feature Fusion module for combining GNN and attention features"""
+
     def __init__(self, dim=32):
+        """Initialize the FeatureFusion instance and configure its dependencies."""
         super(FeatureFusion, self).__init__()
 
-        self.gate = nn.Sequential(
-            nn.Linear(dim * 2, dim),
-            nn.Sigmoid()
-        )
-        self.transform = nn.Sequential(
-            nn.Linear(dim * 2, dim),
-            nn.LeakyReLU()
-        )
+        self.gate = nn.Sequential(nn.Linear(dim * 2, dim), nn.Sigmoid())
+        self.transform = nn.Sequential(nn.Linear(dim * 2, dim), nn.LeakyReLU())
 
     def forward(self, x1, x2):
+        """Compute the FeatureFusion forward pass for the supplied input tensors."""
         combined = torch.cat([x1, x2], dim=1)
         gate = self.gate(combined)
         transformed = self.transform(combined)
@@ -220,7 +242,9 @@ class FeatureFusion(nn.Module):
 
 class Attention(nn.Module):
     """Attention module for basic attention mechanism"""
-    def __init__(self, in_dim=512, hid_dim=512, out_dim=128, act='relu', bias=False, dropout=0):
+
+    def __init__(self, in_dim=512, hid_dim=512, out_dim=128, act="relu", bias=False, dropout=0):
+        """Initialize the Attention instance and configure its dependencies."""
         super(Attention, self).__init__()
         self.dropout = dropout
         self.in_dim = in_dim
@@ -229,17 +253,17 @@ class Attention(nn.Module):
         self.K = 1
 
         self.feature = [nn.Linear(in_dim, hid_dim)]
-        if act == 'gelu':
+        if act == "gelu":
             self.feature += [nn.GELU()]
-        elif act == 'relu':
+        elif act == "relu":
             self.feature += [nn.ReLU()]
-        elif act == 'tanh':
+        elif act == "tanh":
             self.feature += [nn.Tanh()]
-        elif act == 'leaky_relu':
+        elif act == "leaky_relu":
             self.feature += [nn.LeakyReLU()]
         else:
             self.feature += [nn.ReLU()]
-        
+
         if dropout:
             self.feature += [nn.Dropout(self.dropout)]
         self.feature = nn.Sequential(*self.feature)
@@ -247,19 +271,18 @@ class Attention(nn.Module):
         self.attention_a = [
             nn.Linear(self.L, self.D, bias=bias),
         ]
-        if act == 'gelu':
+        if act == "gelu":
             self.attention_a += [nn.GELU()]
-        elif act == 'relu':
+        elif act == "relu":
             self.attention_a += [nn.ReLU()]
-        elif act == 'tanh':
+        elif act == "tanh":
             self.attention_a += [nn.Tanh()]
-        elif act == 'leaky_relu':
+        elif act == "leaky_relu":
             self.attention_a += [nn.LeakyReLU()]
         else:
             self.attention_a += [nn.ReLU()]
 
-        self.attention_b = [nn.Linear(self.L, self.D, bias=bias),
-                            nn.Sigmoid()]
+        self.attention_b = [nn.Linear(self.L, self.D, bias=bias), nn.Sigmoid()]
 
         if dropout:
             self.attention_a += [nn.Dropout(0.25)]
@@ -271,6 +294,7 @@ class Attention(nn.Module):
         self.attention_c = nn.Linear(self.D, self.K, bias=bias)
 
     def forward(self, x):
+        """Compute the Attention forward pass for the supplied input tensors."""
         x = self.feature(x.squeeze(0))
 
         a = self.attention_a(x)
@@ -283,4 +307,3 @@ class Attention(nn.Module):
         x = torch.matmul(A, x)
 
         return x, A
-

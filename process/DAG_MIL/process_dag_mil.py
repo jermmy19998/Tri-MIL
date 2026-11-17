@@ -1,3 +1,4 @@
+from utils.runtime_utils import select_runtime_device
 import os
 
 import h5py
@@ -9,7 +10,15 @@ from tqdm import tqdm
 
 from utils.general_utils import add_epoch_info_log, early_stop, init_epoch_info_log, set_global_seed
 from utils.loop_utils import train_loop, val_loop
-from utils.model_utils import get_criterion, get_model_from_yaml, get_optimizer, get_scheduler, model_select, save_last_model, save_log
+from utils.model_utils import (
+    get_criterion,
+    get_model_from_yaml,
+    get_optimizer,
+    get_scheduler,
+    model_select,
+    save_last_model,
+    save_log,
+)
 from utils.process_utils import get_process_pipeline
 from utils.wsi_utils import WSI_Dataset
 
@@ -23,19 +32,22 @@ class DAG_MIL_WSI_Dataset(WSI_Dataset):
     """
 
     def __init__(self, dataset_info_csv_path, group, h5_csv_path=None):
+        """Initialize the DAG_MIL_WSI_Dataset instance and configure its dependencies."""
         super(DAG_MIL_WSI_Dataset, self).__init__(dataset_info_csv_path, group)
         self.h5_path_dict = {}
-        if h5_csv_path not in [None, '', 'null']:
+        if h5_csv_path not in [None, "", "null"]:
             if os.path.exists(h5_csv_path):
-                h5_paths = pd.read_csv(h5_csv_path)['h5_path'].dropna().values
+                h5_paths = pd.read_csv(h5_csv_path)["h5_path"].dropna().values
                 self.h5_path_dict = {
-                    os.path.splitext(os.path.basename(h5_path))[0]: h5_path
-                    for h5_path in h5_paths
+                    os.path.splitext(os.path.basename(h5_path))[0]: h5_path for h5_path in h5_paths
                 }
             else:
-                print(f"Warning: h5_csv_path '{h5_csv_path}' not found. DAG_MIL will use feature-file coords or pseudo-grid coords.")
+                print(
+                    f"Warning: h5_csv_path '{h5_csv_path}' not found. DAG_MIL will use feature-file coords or pseudo-grid coords."
+                )
 
     def __getitem__(self, idx):
+        """Return the DAG_MIL_WSI_Dataset entry at the requested index."""
         slide_path = self.slide_path_list[idx]
         label = torch.tensor(int(self.labels_list[idx]))
         feat, coords = self._load_feature_and_coords(slide_path)
@@ -53,45 +65,50 @@ class DAG_MIL_WSI_Dataset(WSI_Dataset):
         return feat, label
 
     def _load_feature_and_coords(self, slide_path):
+        """Load feature and coords."""
         coords = None
-        if slide_path.endswith('.h5'):
-            with h5py.File(slide_path, 'r') as h5_file:
-                feat = torch.from_numpy(np.array(h5_file['features']))
-                if 'coords' in h5_file:
-                    coords = torch.from_numpy(np.array(h5_file['coords']))
+        if slide_path.endswith(".h5"):
+            with h5py.File(slide_path, "r") as h5_file:
+                feat = torch.from_numpy(np.array(h5_file["features"]))
+                if "coords" in h5_file:
+                    coords = torch.from_numpy(np.array(h5_file["coords"]))
             return feat, coords
 
         loaded = torch.load(slide_path)
         if isinstance(loaded, dict):
-            if 'feats' in loaded:
-                feat = loaded['feats']
-            elif 'features' in loaded:
-                feat = loaded['features']
+            if "feats" in loaded:
+                feat = loaded["feats"]
+            elif "features" in loaded:
+                feat = loaded["features"]
             else:
-                raise ValueError(f"Unknown dict format in {slide_path}, keys: {list(loaded.keys())}")
-            if 'coords' in loaded:
-                coords = loaded['coords']
+                raise ValueError(
+                    f"Unknown dict format in {slide_path}, keys: {list(loaded.keys())}"
+                )
+            if "coords" in loaded:
+                coords = loaded["coords"]
             return feat, coords
         return loaded, coords
 
     def _load_external_h5_coords(self, slide_path):
+        """Load external h5 coords."""
         if not self.h5_path_dict:
             return None
         slide_name = os.path.splitext(os.path.basename(slide_path))[0]
         h5_path = self.h5_path_dict.get(slide_name)
         if h5_path is None:
             return None
-        with h5py.File(h5_path, 'r') as h5_file:
-            if 'coords' not in h5_file:
+        with h5py.File(h5_path, "r") as h5_file:
+            if "coords" not in h5_file:
                 return None
-            return torch.from_numpy(np.array(h5_file['coords']))
+            return torch.from_numpy(np.array(h5_file["coords"]))
 
 
 def process_DAG_MIL(args):
-    h5_csv_path = args.Dataset.h5_csv_path if hasattr(args.Dataset, 'h5_csv_path') else None
-    train_dataset = DAG_MIL_WSI_Dataset(args.Dataset.dataset_csv_path, 'train', h5_csv_path)
-    val_dataset = DAG_MIL_WSI_Dataset(args.Dataset.dataset_csv_path, 'val', h5_csv_path)
-    test_dataset = DAG_MIL_WSI_Dataset(args.Dataset.dataset_csv_path, 'test', h5_csv_path)
+    """Process DAG MIL."""
+    h5_csv_path = args.Dataset.h5_csv_path if hasattr(args.Dataset, "h5_csv_path") else None
+    train_dataset = DAG_MIL_WSI_Dataset(args.Dataset.dataset_csv_path, "train", h5_csv_path)
+    val_dataset = DAG_MIL_WSI_Dataset(args.Dataset.dataset_csv_path, "val", h5_csv_path)
+    test_dataset = DAG_MIL_WSI_Dataset(args.Dataset.dataset_csv_path, "test", h5_csv_path)
     process_pipeline = get_process_pipeline(val_dataset, test_dataset)
     args.General.process_pipeline = process_pipeline
 
@@ -100,17 +117,27 @@ def process_DAG_MIL(args):
     set_global_seed(args.General.seed)
     num_workers = args.General.num_workers
     if args.Dataset.balanced_sampler.use:
-        sampler = train_dataset.get_balanced_sampler(replacement=args.Dataset.balanced_sampler.replacement)
-        train_dataloader = DataLoader(train_dataset, batch_size=1, num_workers=num_workers, generator=generator, sampler=sampler)
+        sampler = train_dataset.get_balanced_sampler(
+            replacement=args.Dataset.balanced_sampler.replacement
+        )
+        train_dataloader = DataLoader(
+            train_dataset,
+            batch_size=1,
+            num_workers=num_workers,
+            generator=generator,
+            sampler=sampler,
+        )
     else:
-        train_dataloader = DataLoader(train_dataset, batch_size=1, shuffle=True, num_workers=num_workers, generator=generator)
+        train_dataloader = DataLoader(
+            train_dataset, batch_size=1, shuffle=True, num_workers=num_workers, generator=generator
+        )
     val_dataloader = DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=num_workers)
     test_dataloader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=num_workers)
-    print('DataLoader Ready!')
+    print("DataLoader Ready!")
 
-    device = torch.device(f'cuda:{args.General.device}')
+    device = select_runtime_device(args.General.device)[0]
     mil_model = get_model_from_yaml(args).to(device)
-    print('Model Ready!')
+    print("Model Ready!")
 
     optimizer, base_lr = get_optimizer(args, mil_model)
     scheduler, warmup_scheduler = get_scheduler(args, optimizer, base_lr)
@@ -119,34 +146,59 @@ def process_DAG_MIL(args):
 
     epoch_info_log = init_epoch_info_log()
     best_model_metric = args.General.best_model_metric
-    reverse = best_model_metric == 'val_loss'
+    reverse = best_model_metric == "val_loss"
     best_val_metric = 9999 if reverse else 0
     best_epoch = 1
-    print('Start Process!')
-    print('Using Process Pipeline:', process_pipeline)
+    print("Start Process!")
+    print("Using Process Pipeline:", process_pipeline)
 
-    for epoch in tqdm(range(args.General.num_epochs), colour='GREEN'):
+    for epoch in tqdm(range(args.General.num_epochs), colour="GREEN"):
         now_scheduler = warmup_scheduler if epoch + 1 <= warmup_epoch else scheduler
-        train_loss, cost_time = train_loop(device, mil_model, train_dataloader, criterion, optimizer, now_scheduler)
-        if process_pipeline == 'Train_Val_Test':
-            val_loss, val_metrics = val_loop(device, args.General.num_classes, mil_model, val_dataloader, criterion)
-            test_loss, test_metrics = val_loop(device, args.General.num_classes, mil_model, test_dataloader, criterion)
-        elif process_pipeline == 'Train_Val':
-            val_loss, val_metrics = val_loop(device, args.General.num_classes, mil_model, val_dataloader, criterion)
+        train_loss, cost_time = train_loop(
+            device, mil_model, train_dataloader, criterion, optimizer, now_scheduler
+        )
+        if process_pipeline == "Train_Val_Test":
+            val_loss, val_metrics = val_loop(
+                device, args.General.num_classes, mil_model, val_dataloader, criterion
+            )
+            test_loss, test_metrics = val_loop(
+                device, args.General.num_classes, mil_model, test_dataloader, criterion
+            )
+        elif process_pipeline == "Train_Val":
+            val_loss, val_metrics = val_loop(
+                device, args.General.num_classes, mil_model, val_dataloader, criterion
+            )
             test_loss, test_metrics = None, None
         else:
             val_loss, val_metrics, test_loss, test_metrics = None, None, None, None
             if epoch + 1 == args.General.num_epochs:
-                test_loss, test_metrics = val_loop(device, args.General.num_classes, mil_model, test_dataloader, criterion)
+                test_loss, test_metrics = val_loop(
+                    device, args.General.num_classes, mil_model, test_dataloader, criterion
+                )
 
-        print('----------------INFO----------------\n')
-        print(f'EPOCH:{epoch+1},  Train_Loss:{train_loss},  Val_Loss:{val_loss},  Test_Loss:{test_loss},  Cost_Time:{cost_time}\n')
-        print(f'Val_Metrics:  {val_metrics}\n')
-        print(f'Test_Metrics:  {test_metrics}\n')
-        add_epoch_info_log(epoch_info_log, epoch, train_loss, val_loss, test_loss, val_metrics, test_metrics)
-        best_val_metric, best_epoch = model_select(reverse, args, mil_model.state_dict(), val_metrics, best_model_metric, best_val_metric, epoch, best_epoch)
+        print("----------------INFO----------------\n")
+        print(
+            f"EPOCH:{epoch + 1},  Train_Loss:{train_loss},  Val_Loss:{val_loss},  Test_Loss:{test_loss},  Cost_Time:{cost_time}\n"
+        )
+        print(f"Val_Metrics:  {val_metrics}\n")
+        print(f"Test_Metrics:  {test_metrics}\n")
+        add_epoch_info_log(
+            epoch_info_log, epoch, train_loss, val_loss, test_loss, val_metrics, test_metrics
+        )
+        best_val_metric, best_epoch = model_select(
+            reverse,
+            args,
+            mil_model.state_dict(),
+            val_metrics,
+            best_model_metric,
+            best_val_metric,
+            epoch,
+            best_epoch,
+        )
 
-        if early_stop(args, epoch_info_log, process_pipeline, epoch, mil_model.state_dict(), best_epoch):
+        if early_stop(
+            args, epoch_info_log, process_pipeline, epoch, mil_model.state_dict(), best_epoch
+        ):
             break
         if epoch + 1 == args.General.num_epochs:
             save_last_model(args, mil_model.state_dict(), epoch + 1)

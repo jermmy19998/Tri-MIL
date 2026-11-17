@@ -44,6 +44,7 @@ class MultiheadLinearAttention(nn.Module):
         shared_compress_layer=None,
         freeze_compress=0,
     ):
+        """Initialize the MultiheadLinearAttention instance and configure its dependencies."""
         super().__init__()
         self.embed_dim = embed_dim
         self.kdim = kdim if kdim is not None else embed_dim
@@ -53,16 +54,16 @@ class MultiheadLinearAttention(nn.Module):
         self.num_heads = num_heads
         self.dropout = dropout
         self.head_dim = embed_dim // num_heads
-        assert (
-            self.head_dim * num_heads == self.embed_dim
-        ), "embed_dim must be divisible by num_heads"
-        self.scaling = self.head_dim ** -0.5
+        assert self.head_dim * num_heads == self.embed_dim, (
+            "embed_dim must be divisible by num_heads"
+        )
+        self.scaling = self.head_dim**-0.5
 
         self.self_attention = self_attention
         self.encoder_decoder_attention = encoder_decoder_attention
 
         assert not self.self_attention or self.qkv_same_dim, (
-            "Self-attention requires query, key and " "value to be of the same size"
+            "Self-attention requires query, key and value to be of the same size"
         )
 
         self.k_proj = quant_noise(
@@ -80,9 +81,7 @@ class MultiheadLinearAttention(nn.Module):
             self.compress_seq_len = max_seq_len // compressed
             self.compress_k = nn.Linear(max_seq_len, self.compress_seq_len, bias=False)
             if shared_kv_compressed == 0:
-                self.compress_v = nn.Linear(
-                    max_seq_len, self.compress_seq_len, bias=False
-                )
+                self.compress_v = nn.Linear(max_seq_len, self.compress_seq_len, bias=False)
             self.layerwise_sharing = False
         else:
             self.compress_k = shared_compress_layer
@@ -113,30 +112,26 @@ class MultiheadLinearAttention(nn.Module):
         self.onnx_trace = False
 
     def prepare_for_onnx_export_(self):
+        """Prepare for onnx export."""
         self.onnx_trace = True
 
     def reset_parameters(self):
+        """Reset parameters."""
         if self.qkv_same_dim:
             # Empirically observed the convergence to be much better with
             # the scaled initialization
             nn.init.xavier_uniform_(self.k_proj.weight, gain=1 / math.sqrt(2))
             nn.init.xavier_uniform_(self.v_proj.weight, gain=1 / math.sqrt(2))
             nn.init.xavier_uniform_(self.q_proj.weight, gain=1 / math.sqrt(2))
-            if (
-                not self.layerwise_sharing
-            ):  # otherwise, we already initialize the parameters
+            if not self.layerwise_sharing:  # otherwise, we already initialize the parameters
                 nn.init.xavier_uniform_(self.compress_k.weight, gain=1 / math.sqrt(2))
                 if self.shared_kv_compressed == 0:
-                    nn.init.xavier_uniform_(
-                        self.compress_v.weight, gain=1 / math.sqrt(2)
-                    )
+                    nn.init.xavier_uniform_(self.compress_v.weight, gain=1 / math.sqrt(2))
         else:
             nn.init.xavier_uniform_(self.k_proj.weight)
             nn.init.xavier_uniform_(self.v_proj.weight)
             nn.init.xavier_uniform_(self.q_proj.weight)
-            if (
-                not self.layerwise_sharing
-            ):  # otherwise, we already initialize the parameters
+            if not self.layerwise_sharing:  # otherwise, we already initialize the parameters
                 nn.init.xavier_uniform_(self.compress_k.weight)
                 if self.shared_kv_compressed == 0:
                     nn.init.xavier_uniform_(self.compress_v.weight)
@@ -244,9 +239,7 @@ class MultiheadLinearAttention(nn.Module):
             k = torch.cat([k, self.bias_k.repeat(1, bsz, 1)])
             v = torch.cat([v, self.bias_v.repeat(1, bsz, 1)])
             if attn_mask is not None:
-                attn_mask = torch.cat(
-                    [attn_mask, attn_mask.new_zeros(attn_mask.size(0), 1)], dim=1
-                )
+                attn_mask = torch.cat([attn_mask, attn_mask.new_zeros(attn_mask.size(0), 1)], dim=1)
             if key_padding_mask is not None:
                 key_padding_mask = torch.cat(
                     [
@@ -256,23 +249,11 @@ class MultiheadLinearAttention(nn.Module):
                     dim=1,
                 )
 
-        q = (
-            q.contiguous()
-            .view(tgt_len, bsz * self.num_heads, self.head_dim)
-            .transpose(0, 1)
-        )
+        q = q.contiguous().view(tgt_len, bsz * self.num_heads, self.head_dim).transpose(0, 1)
         if k is not None:
-            k = (
-                k.contiguous()
-                .view(-1, bsz * self.num_heads, self.head_dim)
-                .transpose(0, 1)
-            )
+            k = k.contiguous().view(-1, bsz * self.num_heads, self.head_dim).transpose(0, 1)
         if v is not None:
-            v = (
-                v.contiguous()
-                .view(-1, bsz * self.num_heads, self.head_dim)
-                .transpose(0, 1)
-            )
+            v = v.contiguous().view(-1, bsz * self.num_heads, self.head_dim).transpose(0, 1)
 
         if saved_state is not None:
             # saved states are stored with shape (bsz, num_heads, seq_len, head_dim)
@@ -321,9 +302,7 @@ class MultiheadLinearAttention(nn.Module):
             k = torch.cat([k, k.new_zeros((k.size(0), 1) + k.size()[2:])], dim=1)
             v = torch.cat([v, v.new_zeros((v.size(0), 1) + v.size()[2:])], dim=1)
             if attn_mask is not None:
-                attn_mask = torch.cat(
-                    [attn_mask, attn_mask.new_zeros(attn_mask.size(0), 1)], dim=1
-                )
+                attn_mask = torch.cat([attn_mask, attn_mask.new_zeros(attn_mask.size(0), 1)], dim=1)
 
         attn_weights = torch.bmm(q, k.transpose(1, 2))
         print(attn_weights.shape)
@@ -342,9 +321,7 @@ class MultiheadLinearAttention(nn.Module):
         if before_softmax:
             return attn_weights, v
 
-        attn_weights_float = utils.softmax(
-            attn_weights, dim=-1, onnx_trace=self.onnx_trace
-        )
+        attn_weights_float = utils.softmax(attn_weights, dim=-1, onnx_trace=self.onnx_trace)
         attn_weights = attn_weights_float.type_as(attn_weights)
         attn_probs = F.dropout(
             attn_weights,
@@ -363,9 +340,9 @@ class MultiheadLinearAttention(nn.Module):
         attn = self.out_proj(attn)
         attn_weights: Optional[Tensor] = None
         if need_weights:
-            attn_weights = attn_weights_float.view(
-                bsz, self.num_heads, tgt_len, src_len
-            ).transpose(1, 0)
+            attn_weights = attn_weights_float.view(bsz, self.num_heads, tgt_len, src_len).transpose(
+                1, 0
+            )
             if not need_head_weights:
                 # average attention weights over heads
                 attn_weights = attn_weights.mean(dim=0)
@@ -381,6 +358,7 @@ class MultiheadLinearAttention(nn.Module):
         static_kv: bool,
     ) -> Optional[Tensor]:
         # saved key padding masks have shape (bsz, seq_len)
+        """Append prev key padding mask."""
         if prev_key_padding_mask is not None and static_kv:
             new_key_padding_mask = prev_key_padding_mask
         elif prev_key_padding_mask is not None and key_padding_mask is not None:
@@ -395,17 +373,13 @@ class MultiheadLinearAttention(nn.Module):
                 (batch_size, src_len - prev_key_padding_mask.size(1)),
                 device=prev_key_padding_mask.device,
             )
-            new_key_padding_mask = torch.cat(
-                [prev_key_padding_mask.float(), filler.float()], dim=1
-            )
+            new_key_padding_mask = torch.cat([prev_key_padding_mask.float(), filler.float()], dim=1)
         elif key_padding_mask is not None:
             filler = torch.zeros(
                 (batch_size, src_len - key_padding_mask.size(1)),
                 device=key_padding_mask.device,
             )
-            new_key_padding_mask = torch.cat(
-                [filler.float(), key_padding_mask.float()], dim=1
-            )
+            new_key_padding_mask = torch.cat([filler.float(), key_padding_mask.float()], dim=1)
         else:
             new_key_padding_mask = prev_key_padding_mask
         return new_key_padding_mask
@@ -422,9 +396,9 @@ class MultiheadLinearAttention(nn.Module):
             for k in input_buffer.keys():
                 input_buffer_k = input_buffer[k]
                 if input_buffer_k is not None:
-                    if self.encoder_decoder_attention and input_buffer_k.size(
+                    if self.encoder_decoder_attention and input_buffer_k.size(0) == new_order.size(
                         0
-                    ) == new_order.size(0):
+                    ):
                         break
                     input_buffer[k] = input_buffer_k.index_select(0, new_order)
             incremental_state = self._set_input_buffer(incremental_state, input_buffer)
@@ -433,6 +407,7 @@ class MultiheadLinearAttention(nn.Module):
     def _get_input_buffer(
         self, incremental_state: Optional[Dict[str, Dict[str, Optional[Tensor]]]]
     ) -> Dict[str, Optional[Tensor]]:
+        """Get input buffer."""
         result = self.get_incremental_state(incremental_state, "attn_state")
         if result is not None:
             return result
@@ -445,12 +420,15 @@ class MultiheadLinearAttention(nn.Module):
         incremental_state: Dict[str, Dict[str, Optional[Tensor]]],
         buffer: Dict[str, Optional[Tensor]],
     ):
+        """Set input buffer."""
         return self.set_incremental_state(incremental_state, "attn_state", buffer)
 
     def apply_sparse_mask(attn_weights, tgt_len: int, src_len: int, bsz: int):
+        """Apply sparse mask."""
         return attn_weights
 
     def upgrade_state_dict_named(self, state_dict, name):
+        """Upgrade state dict named."""
         prefix = name + "." if name != "" else ""
         items_to_add = {}
         keys_to_remove = []
@@ -468,9 +446,7 @@ class MultiheadLinearAttention(nn.Module):
                 if k_bias in state_dict.keys():
                     dim = int(state_dict[k].shape[0] / 3)
                     items_to_add[prefix + "q_proj.bias"] = state_dict[k_bias][:dim]
-                    items_to_add[prefix + "k_proj.bias"] = state_dict[k_bias][
-                        dim : 2 * dim
-                    ]
+                    items_to_add[prefix + "k_proj.bias"] = state_dict[k_bias][dim : 2 * dim]
                     items_to_add[prefix + "v_proj.bias"] = state_dict[k_bias][2 * dim :]
 
                     keys_to_remove.append(prefix + "in_proj_bias")

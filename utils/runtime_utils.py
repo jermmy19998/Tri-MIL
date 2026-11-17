@@ -15,12 +15,14 @@ PIPELINE_SECTION_NAMES = ("Common", "Train", "Valid", "Test", "Infer", "Heatmap"
 
 
 def read_plain_yaml(path: str) -> dict:
+    """Read plain yaml."""
     with open(path, "r", encoding="utf-8") as handle:
         data = yaml.safe_load(handle)
     return data or {}
 
 
 def is_pipeline_yaml(config: dict) -> bool:
+    """Is pipeline yaml."""
     if not isinstance(config, dict):
         return False
     if "General" in config and "Model" in config:
@@ -29,11 +31,15 @@ def is_pipeline_yaml(config: dict) -> bool:
 
 
 def get_pipeline_section(config: dict, section_name: str) -> dict:
+    """Get pipeline section."""
     section = config.get(section_name, {})
     return section if isinstance(section, dict) else {}
 
 
-def get_pipeline_section_compat(config: dict, primary_name: str, legacy_names: tuple[str, ...] = ()) -> dict:
+def get_pipeline_section_compat(
+    config: dict, primary_name: str, legacy_names: tuple[str, ...] = ()
+) -> dict:
+    """Get pipeline section compat."""
     section = get_pipeline_section(config, primary_name)
     if section:
         return section
@@ -45,13 +51,19 @@ def get_pipeline_section_compat(config: dict, primary_name: str, legacy_names: t
 
 
 def resolve_model_yaml_path(yaml_path: str, pipeline_config: dict | None = None) -> str:
+    """Resolve model yaml path."""
     pipeline_config = pipeline_config or {}
     common_cfg = get_pipeline_section(pipeline_config, "Common")
     model_yaml_path = common_cfg.get("model_yaml_path") or common_cfg.get("yaml_path")
-    return str(Path(model_yaml_path).expanduser().resolve()) if model_yaml_path else str(Path(yaml_path).expanduser().resolve())
+    return (
+        str(Path(model_yaml_path).expanduser().resolve())
+        if model_yaml_path
+        else str(Path(yaml_path).expanduser().resolve())
+    )
 
 
 def merge_nested_dict(base: dict, overrides: dict) -> dict:
+    """Merge nested dict."""
     merged = copy.deepcopy(base)
     for key, value in overrides.items():
         if isinstance(value, dict) and isinstance(merged.get(key), dict):
@@ -62,6 +74,7 @@ def merge_nested_dict(base: dict, overrides: dict) -> dict:
 
 
 def collect_feature_files(feature_dir: str, recursive: bool = False) -> list[str]:
+    """Collect feature files."""
     root = Path(feature_dir).expanduser().resolve()
     if not root.exists():
         raise FileNotFoundError(f"Feature directory does not exist: {feature_dir}")
@@ -89,11 +102,14 @@ def resolve_first_feature_path(
     feature_dir: str | None = None,
     recursive: bool = False,
 ) -> str:
+    """Resolve first feature path."""
     if feature_dir:
         return collect_feature_files(feature_dir, recursive=recursive)[0]
 
     if not csv_path:
-        raise ValueError("Either csv_path or feature_dir must be provided to resolve a feature file.")
+        raise ValueError(
+            "Either csv_path or feature_dir must be provided to resolve a feature file."
+        )
 
     df = pd.read_csv(csv_path)
     candidate_columns = [
@@ -116,6 +132,7 @@ def resolve_first_feature_path(
 
 
 def _torch_load_any(path: str):
+    """Torch load any."""
     try:
         return torch.load(path, map_location="cpu", weights_only=True)
     except Exception:
@@ -123,6 +140,7 @@ def _torch_load_any(path: str):
 
 
 def load_torch_checkpoint(path: str, map_location="cpu"):
+    """Load torch checkpoint."""
     try:
         return torch.load(path, map_location=map_location, weights_only=True)
     except Exception:
@@ -130,6 +148,7 @@ def load_torch_checkpoint(path: str, map_location="cpu"):
 
 
 def infer_feature_dim(feature_path: str) -> int:
+    """Infer feature dim."""
     if feature_path.endswith(".h5"):
         with h5py.File(feature_path, "r") as handle:
             if "features" not in handle:
@@ -154,12 +173,15 @@ def infer_feature_dim(feature_path: str) -> int:
         feature_obj = torch.as_tensor(feature_obj)
 
     if feature_obj.ndim < 2:
-        raise ValueError(f"Unexpected feature tensor shape in {feature_path}: {tuple(feature_obj.shape)}")
+        raise ValueError(
+            f"Unexpected feature tensor shape in {feature_path}: {tuple(feature_obj.shape)}"
+        )
 
     return int(feature_obj.shape[-1])
 
 
 def select_runtime_device(requested_device=None) -> tuple[torch.device, str]:
+    """Select runtime device."""
     if isinstance(requested_device, torch.device):
         return requested_device, f"Using device {requested_device}."
 
@@ -211,6 +233,7 @@ def create_infer_csv_from_feature_dir(
     output_csv: str,
     recursive: bool = False,
 ) -> str:
+    """Create infer csv from feature dir."""
     feature_files = collect_feature_files(feature_dir, recursive=recursive)
     output_path = Path(output_csv).expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -219,6 +242,7 @@ def create_infer_csv_from_feature_dir(
 
 
 def clone_config_with_overrides(base_config_path: str, output_path: str, overrides: dict) -> str:
+    """Clone config with overrides."""
     with open(base_config_path, "r", encoding="utf-8") as handle:
         config = yaml.safe_load(handle)
 
@@ -238,6 +262,7 @@ def clone_config_with_overrides(base_config_path: str, output_path: str, overrid
 
 
 def clone_config_with_updates(base_config_path: str, output_path: str, updater) -> str:
+    """Clone config with updates."""
     with open(base_config_path, "r", encoding="utf-8") as handle:
         config = yaml.safe_load(handle)
 
@@ -252,6 +277,7 @@ def clone_config_with_updates(base_config_path: str, output_path: str, updater) 
 
 
 def infer_encoder_name_from_feature_dir(feature_dir: str | None) -> str:
+    """Infer encoder name from feature dir."""
     if not feature_dir:
         return "unknown_encoder"
     name = Path(feature_dir).expanduser().resolve().name
@@ -268,6 +294,7 @@ def build_train_base_csv_from_reference(
     label_col: str,
     feature_recursive: bool = False,
 ) -> tuple[str, dict[str, int]]:
+    """Build train base csv from reference."""
     feature_files = collect_feature_files(feature_dir, recursive=feature_recursive)
     feature_map = {Path(path).stem: path for path in feature_files}
 
@@ -309,6 +336,7 @@ def build_train_base_csv_from_source_dirs(
     feature_recursive: bool = False,
     source_recursive: bool = True,
 ) -> tuple[str, dict[str, int]]:
+    """Build train base csv from source dirs."""
     source_root = Path(source_dir).expanduser().resolve()
     if not source_root.exists():
         raise FileNotFoundError(f"Source directory does not exist: {source_dir}")
@@ -322,8 +350,21 @@ def build_train_base_csv_from_source_dirs(
 
     label_map = {label_dir.name: idx for idx, label_dir in enumerate(label_dirs)}
     source_suffixes = {
-        ".svs", ".tif", ".tiff", ".ndpi", ".mrxs", ".scn", ".vms", ".vmu", ".bif",
-        ".svslide", ".png", ".jpg", ".jpeg", ".bmp", ".czi",
+        ".svs",
+        ".tif",
+        ".tiff",
+        ".ndpi",
+        ".mrxs",
+        ".scn",
+        ".vms",
+        ".vmu",
+        ".bif",
+        ".svslide",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".bmp",
+        ".czi",
     }
 
     rows = []
@@ -353,6 +394,7 @@ def build_kfold_dataset_dir(
     seed: int = 42,
     k: int = 3,
 ) -> str:
+    """Build kfold dataset dir."""
     df = pd.read_csv(base_csv_path)
     if "slide_path" not in df.columns or "label" not in df.columns:
         raise ValueError("Base training CSV must contain slide_path and label columns.")
@@ -386,6 +428,7 @@ def build_kfold_dataset_dir(
 
 
 def write_label_map_json(label_map: dict[str, int], output_path: str) -> str:
+    """Write label map json."""
     target = Path(output_path).expanduser().resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
     with open(target, "w", encoding="utf-8") as handle:

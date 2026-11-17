@@ -14,7 +14,7 @@ from geopandas import gpd
 from shapely import Polygon
 
 
-COMPOUND_EXTENSIONS = {'.ome.tif', '.ome.tiff', '.ome.zarr'}
+COMPOUND_EXTENSIONS = {".ome.tif", ".ome.tiff", ".ome.zarr"}
 
 
 def splitext(path: str) -> tuple:
@@ -22,7 +22,7 @@ def splitext(path: str) -> tuple:
     path_lower = path.lower()
     for ext in COMPOUND_EXTENSIONS:
         if path_lower.endswith(ext):
-            return path[:-len(ext)], path[-len(ext):]
+            return path[: -len(ext)], path[-len(ext) :]
     return os.path.splitext(path)
 
 
@@ -37,8 +37,8 @@ def collect_valid_slides(
     custom_list_path: Optional[str] = None,
     wsi_ext: Optional[List[str]] = None,
     search_nested: bool = False,
-    max_workers: int = 8,
-    return_relative_paths: bool = False
+    max_workers: Optional[int] = 8,
+    return_relative_paths: bool = False,
 ) -> Union[List[str], Tuple[List[str], List[str]]]:
     """
     Retrieve all valid WSI file paths from a directory, optionally filtered by a custom list.
@@ -52,8 +52,9 @@ def collect_valid_slides(
             Allowed file extensions.
         search_nested (bool):
             Whether to search subdirectories.
-        max_workers (int):
-            Threads to use when checking file existence.
+        max_workers (Optional[int]):
+            Threads to use when checking file existence. Set to 0 to validate
+            paths synchronously in the main process; None uses the executor default.
         return_relative_paths (bool):
             Whether to also return relative paths.
 
@@ -71,18 +72,25 @@ def collect_valid_slides(
         from concurrent.futures import ThreadPoolExecutor
 
         wsi_df = pd.read_csv(custom_list_path)
-        if 'wsi' not in wsi_df.columns:
+        if "wsi" not in wsi_df.columns:
             raise ValueError("CSV must contain a column named 'wsi'.")
 
-        rel_paths = wsi_df['wsi'].dropna().astype(str).tolist()
+        rel_paths = wsi_df["wsi"].dropna().astype(str).tolist()
         if not rel_paths:
             raise ValueError(f"No valid slides found in the custom list at {custom_list_path}.")
 
         def exists_fn(rel_path: str) -> bool:
+            """Exists fn."""
             return os.path.exists(os.path.join(wsi_dir, rel_path))
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            results = list(executor.map(exists_fn, rel_paths))
+        if max_workers is not None and max_workers < 0:
+            raise ValueError("max_workers must be non-negative.")
+
+        if max_workers == 0:
+            results = [exists_fn(rel_path) for rel_path in rel_paths]
+        else:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                results = list(executor.map(exists_fn, rel_paths))
 
         for rel_path, exists in zip(rel_paths, results):
             if not exists:
@@ -96,11 +104,13 @@ def collect_valid_slides(
     else:
         if wsi_ext is None:
             from trident.Converter import PIL_EXTENSIONS, OPENSLIDE_EXTENSIONS
+
             wsi_ext = list(PIL_EXTENSIONS) + list(OPENSLIDE_EXTENSIONS)
 
         wsi_ext = [ext.lower() for ext in wsi_ext]
 
         def matches_ext(filename: str) -> bool:
+            """Matches ext."""
             return any(filename.lower().endswith(ext) for ext in wsi_ext)
 
         if search_nested:
@@ -110,10 +120,7 @@ def collect_valid_slides(
                         rel_path = os.path.relpath(os.path.join(root, f), wsi_dir)
                         valid_rel_paths.append(rel_path)
         else:
-            valid_rel_paths = [
-                f for f in os.listdir(wsi_dir)
-                if matches_ext(f)
-            ]
+            valid_rel_paths = [f for f in os.listdir(wsi_dir) if matches_ext(f)]
 
         valid_rel_paths.sort()
 
@@ -140,7 +147,7 @@ def get_dir() -> str:
 def set_dir(d: Union[str, os.PathLike]) -> None:
     r"""
     Optionally set the Trident cache directory used to save downloaded models & weights.
-    
+
     Parameters:
         d (Union[str, os.PathLike]):
             Path to a local folder to save downloaded models & weights.
@@ -150,6 +157,7 @@ def set_dir(d: Union[str, os.PathLike]) -> None:
 
 
 def _get_trident_home() -> str:
+    """Get trident home."""
     trident_home = os.path.expanduser(
         os.getenv(
             ENV_TRIDENT_HOME,
@@ -160,12 +168,14 @@ def _get_trident_home() -> str:
 
 
 def has_internet_connection(timeout: float = 3.0) -> bool:
+    """Has internet connection."""
     endpoint = os.environ.get("HF_ENDPOINT", "huggingface.co")
-    
+
     if endpoint.startswith(("http://", "https://")):
         from urllib.parse import urlparse
+
         endpoint = urlparse(endpoint).netloc
-    
+
     try:
         # Fast socket-level check
         with socket.create_connection((endpoint, 443), timeout=timeout):
@@ -176,21 +186,24 @@ def has_internet_connection(timeout: float = 3.0) -> bool:
     try:
         # Fallback HTTP-level check (if requests is available)
         import requests
-        url = f"https://{endpoint}" if not endpoint.startswith(("http://", "https://")) else endpoint
+
+        url = (
+            f"https://{endpoint}" if not endpoint.startswith(("http://", "https://")) else endpoint
+        )
         r = requests.head(url, timeout=timeout)
         return r.status_code < 500
     except Exception:
         return False
 
 
-def  get_weights_path(model_type: str, encoder_name: str) -> str:
+def get_weights_path(model_type: str, encoder_name: str) -> str:
     """
     Retrieve the path to the weights file for a given model name.
     This function looks up the path to the weights file in a local checkpoint
     registry (local_ckpts.json). If the path in the registry is absolute, it
     returns that path. If the path is relative, it joins the relative path with
     the provided weights_root directory.
-    
+
     Parameters:
         model_type (str):
             The type of model ('patch', 'slide', or 'seg').
@@ -201,9 +214,11 @@ def  get_weights_path(model_type: str, encoder_name: str) -> str:
         str: The absolute path to the weights file.
     """
 
-    assert model_type in ['patch', 'slide', 'seg'], f"Encoder type must be 'patch' or 'slide' or 'seg', not '{model_type}'"
+    assert model_type in ["patch", "slide", "seg"], (
+        f"Encoder type must be 'patch' or 'slide' or 'seg', not '{model_type}'"
+    )
 
-    if model_type == 'patch' or model_type == 'slide':
+    if model_type == "patch" or model_type == "slide":
         root = os.path.join(os.path.dirname(__file__), f"{model_type}_encoder_models")
     else:
         root = os.path.join(os.path.dirname(__file__), "segmentation_models")
@@ -212,9 +227,11 @@ def  get_weights_path(model_type: str, encoder_name: str) -> str:
     with open(registry_path, "r") as f:
         registry = json.load(f)
 
-    path = registry.get(encoder_name)    
+    path = registry.get(encoder_name)
     if path:
-        path = path if os.path.isabs(path) else os.path.abspath(os.path.join(root, 'model_zoo', path)) # Make path absolute
+        path = (
+            path if os.path.isabs(path) else os.path.abspath(os.path.join(root, "model_zoo", path))
+        )  # Make path absolute
         if not os.path.exists(path):
             path = ""
 
@@ -223,8 +240,8 @@ def  get_weights_path(model_type: str, encoder_name: str) -> str:
 
 def create_lock(path: str, suffix: Optional[str] = None) -> None:
     """
-    Create a lock file to signal that a particular file or process 
-    is currently being worked on. This is especially useful in multiprocessing or distributed 
+    Create a lock file to signal that a particular file or process
+    is currently being worked on. This is especially useful in multiprocessing or distributed
     systems to avoid conflicts or multiple processes working on the same resource.
 
     Parameters:
@@ -242,7 +259,7 @@ def create_lock(path: str, suffix: Optional[str] = None) -> None:
     if suffix is not None:
         path = f"{path}_{suffix}"
     lock_file = f"{path}.lock"
-    with open(lock_file, 'w') as f:
+    with open(lock_file, "w") as f:
         # Write metadata to allow safe dead-lock cleanup.
         payload = {
             "pid": os.getpid(),
@@ -251,11 +268,13 @@ def create_lock(path: str, suffix: Optional[str] = None) -> None:
         }
         f.write(json.dumps(payload))
 
+
 #####################
+
 
 def remove_lock(path: str, suffix: Optional[str] = None) -> None:
     """
-    Remove a lock file, signaling that the file or process 
+    Remove a lock file, signaling that the file or process
     is no longer in use and is available for other operations.
 
     Parameters:
@@ -279,11 +298,13 @@ def remove_lock(path: str, suffix: Optional[str] = None) -> None:
     except Exception:
         pass
 
+
 #####################
+
 
 def is_locked(path: str, suffix: Optional[str] = None) -> bool:
     """
-    Check if a resource is currently locked by verifying 
+    Check if a resource is currently locked by verifying
     the existence of a `.lock` file.
 
     Parameters:
@@ -416,7 +437,7 @@ def clear_dead_locks(root_dir: str, *, legacy_max_age_seconds: float = 24 * 3600
 ###########################################################################
 def update_log(path_to_log, key, message):
     """
-    The `update_log` function appends or updates a message in a log file. It is useful for tracking 
+    The `update_log` function appends or updates a message in a log file. It is useful for tracking
     progress or recording errors during a long-running process.
 
     Parameters:
@@ -437,29 +458,31 @@ def update_log(path_to_log, key, message):
     --------
     >>> update_log("processing.log", "slide1", "Processing completed")
     >>> # Appends or updates "slide1: Processing completed" in the log file.
-    """    
+    """
     # Create log if it doesn't exist
     if not os.path.exists(path_to_log):
-        with open(path_to_log, 'w') as f:
-            f.write(f'{key}: {message}\n')
+        with open(path_to_log, "w") as f:
+            f.write(f"{key}: {message}\n")
             return
-        
+
     # If slide id already in log, delete the message and add the new one
     if os.path.exists(path_to_log):
-        with open(path_to_log, 'r') as f:
+        with open(path_to_log, "r") as f:
             lines = f.readlines()
-        with open(path_to_log, 'w') as f:
+        with open(path_to_log, "w") as f:
             for line in lines:
-                if not line.split(':')[0] == key:
+                if not line.split(":")[0] == key:
                     f.write(line)
-            f.write(f'{key}: {message}\n')
+            f.write(f"{key}: {message}\n")
         return
-    
+
+
 ################################################################################
 
-def save_h5(save_path, assets, attributes = None, mode = 'w'):
+
+def save_h5(save_path, assets, attributes=None, mode="w"):
     """
-    The `save_h5` function saves a dictionary of assets to an HDF5 file. This is commonly used to store 
+    The `save_h5` function saves a dictionary of assets to an HDF5 file. This is commonly used to store
     large datasets or hierarchical data structures in a compact and organized format.
 
     Parameters:
@@ -491,9 +514,11 @@ def save_h5(save_path, assets, attributes = None, mode = 'w'):
             data_shape = val.shape
             if key not in file:
                 data_type = val.dtype
-                chunk_shape = (1, ) + data_shape[1:]
-                maxshape = (None, ) + data_shape[1:]
-                dset = file.create_dataset(key, shape=data_shape, maxshape=maxshape, chunks=chunk_shape, dtype=data_type)
+                chunk_shape = (1,) + data_shape[1:]
+                maxshape = (None,) + data_shape[1:]
+                dset = file.create_dataset(
+                    key, shape=data_shape, maxshape=maxshape, chunks=chunk_shape, dtype=data_type
+                )
                 dset[:] = val
                 if attributes is not None:
                     if key in attributes.keys():
@@ -504,25 +529,29 @@ def save_h5(save_path, assets, attributes = None, mode = 'w'):
                                     attr_val = json.dumps(attr_val)
                                 # Serialize Nones
                                 elif attr_val is None:
-                                    attr_val = 'None'
+                                    attr_val = "None"
                                 dset.attrs[attr_key] = attr_val
                             except:
-                                raise Exception(f'WARNING: Could not save attribute {attr_key} with value {attr_val} for asset {key}')
-                                
+                                raise Exception(
+                                    f"WARNING: Could not save attribute {attr_key} with value {attr_val} for asset {key}"
+                                )
+
             else:
                 dset = file[key]
                 dset.resize(len(dset) + data_shape[0], axis=0)
-                dset[-data_shape[0]:] = val
+                dset[-data_shape[0] :] = val
+
 
 ################################################################################
 
+
 class JSONsaver(json.JSONEncoder):
     """
-    The `JSONsaver` class extends the `json.JSONEncoder` to handle objects that are typically 
-    unserializable by the standard JSON encoder. It provides support for custom types, including 
+    The `JSONsaver` class extends the `json.JSONEncoder` to handle objects that are typically
+    unserializable by the standard JSON encoder. It provides support for custom types, including
     NumPy arrays, ranges, PyTorch data types, and callable objects.
 
-    This class is particularly useful when saving complex configurations or datasets to JSON files, 
+    This class is particularly useful when saving complex configurations or datasets to JSON files,
     ensuring that all objects are serialized correctly or replaced with representative strings.
 
     Methods:
@@ -547,7 +576,9 @@ class JSONsaver(json.JSONEncoder):
     ...     json.dump(data, f, cls=JSONsaver)
     >>> # Successfully saves all objects to "output.json".
     """
+
     def default(self, obj):
+        """Default."""
         if isinstance(obj, np.floating):
             return float(obj)
         elif isinstance(obj, range):
@@ -561,22 +592,22 @@ class JSONsaver(json.JSONEncoder):
         elif obj in [torch.float16, torch.float32, torch.bfloat16]:
             return str(obj)
         elif callable(obj):
-            if hasattr(obj, '__name__'):
-                if obj.__name__ == '<lambda>':
-                    return f'CALLABLE.{id(obj)}' # Unique identifier for lambda functions
-                else:   
-                    return f'CALLABLE.{obj.__name__}'
+            if hasattr(obj, "__name__"):
+                if obj.__name__ == "<lambda>":
+                    return f"CALLABLE.{id(obj)}"  # Unique identifier for lambda functions
+                else:
+                    return f"CALLABLE.{obj.__name__}"
             else:
-                return f'CALLABLE.{str(obj)}'
+                return f"CALLABLE.{str(obj)}"
         else:
             print(f"[WARNING] Could not serialize object {obj}")
             return super().default(obj)
-        
+
 
 def read_coords(coords_path):
     """
-    The `read_coords` function reads patch coordinates from an HDF5 file, along with any user-defined 
-    attributes stored during the patching process. This function is essential for workflows that rely 
+    The `read_coords` function reads patch coordinates from an HDF5 file, along with any user-defined
+    attributes stored during the patching process. This function is essential for workflows that rely
     on spatial metadata, such as patch-based analysis in computational pathology.
 
     Parameters:
@@ -599,16 +630,16 @@ def read_coords(coords_path):
     >>> print(coords)
     [[0, 0], [0, 256], [256, 0], ...]
     """
-    with h5py.File(coords_path, 'r') as f:
-        attrs = dict(f['coords'].attrs)
-        coords = f['coords'][:]
+    with h5py.File(coords_path, "r") as f:
+        attrs = dict(f["coords"].attrs)
+        coords = f["coords"][:]
     return attrs, coords
 
 
 def read_coords_legacy(coords_path):
     """
-    The `read_coords_legacy` function reads legacy patch coordinates from an HDF5 file. This function 
-    is designed for compatibility with older patching tools such as CLAM or Fishing-Rod, which used 
+    The `read_coords_legacy` function reads legacy patch coordinates from an HDF5 file. This function
+    is designed for compatibility with older patching tools such as CLAM or Fishing-Rod, which used
     a different structure for storing patching metadata.
 
     Parameters:
@@ -635,56 +666,51 @@ def read_coords_legacy(coords_path):
     >>> print(coords)
     [[0, 0], [256, 0], [0, 256], ...]
     """
-    with h5py.File(coords_path, 'r') as f:
-        patch_size = f['coords'].attrs['patch_size']
-        patch_level = f['coords'].attrs['patch_level']
-        custom_downsample = f['coords'].attrs.get('custom_downsample', 1)
-        coords = f['coords'][:]
+    with h5py.File(coords_path, "r") as f:
+        patch_size = f["coords"].attrs["patch_size"]
+        patch_level = f["coords"].attrs["patch_level"]
+        custom_downsample = f["coords"].attrs.get("custom_downsample", 1)
+        coords = f["coords"][:]
     return patch_size, patch_level, custom_downsample, coords
 
 
 def coords_to_h5(
-    coords: List[List[int]], 
-    save_path, 
-    patch_size, 
-    src_mag, 
-    target_mag, 
-    save_coords, 
-    width, 
-    height, 
+    coords: List[List[int]],
+    save_path,
+    patch_size,
+    src_mag,
+    target_mag,
+    save_coords,
+    width,
+    height,
     name,
-    overlap
+    overlap,
 ):
-    """ Save tissue coordinates to .h5 """
+    """Save tissue coordinates to .h5"""
     coords_array = np.asarray(coords, dtype=np.int64)
     if coords_array.size == 0:
         coords_array = coords_array.reshape(0, 2)
     elif coords_array.ndim == 1 and coords_array.shape[0] == 2:
         coords_array = coords_array.reshape(1, 2)
     elif coords_array.ndim != 2 or coords_array.shape[1] != 2:
-        raise ValueError(
-            f"coords must have shape (N, 2). Got shape {coords_array.shape}."
-        )
+        raise ValueError(f"coords must have shape (N, 2). Got shape {coords_array.shape}.")
 
     # Prepare assets for saving
-    assets = {'coords' : coords_array}
+    assets = {"coords": coords_array}
     attributes = {
-        'patch_size': patch_size, # Reference frame: patch_level
-        'patch_size_level0': patch_size * src_mag // target_mag, # Reference frame: level0
-        'level0_magnification': src_mag,
-        'target_magnification': target_mag,
-        'overlap': overlap,
-        'name': name,
-        'savetodir': save_coords,
-        'level0_width': width,
-        'level0_height': height
+        "patch_size": patch_size,  # Reference frame: patch_level
+        "patch_size_level0": patch_size * src_mag // target_mag,  # Reference frame: level0
+        "level0_magnification": src_mag,
+        "target_magnification": target_mag,
+        "overlap": overlap,
+        "name": name,
+        "savetodir": save_coords,
+        "level0_width": width,
+        "level0_height": height,
     }
 
     # Save the assets and attributes to an hdf5 file
-    save_h5(save_path,
-            assets = assets,
-            attributes = {'coords': attributes},
-            mode='w')
+    save_h5(save_path, assets=assets, attributes={"coords": attributes}, mode="w")
 
 
 def mask_to_gdf(
@@ -694,20 +720,20 @@ def mask_to_gdf(
     max_nb_holes: int = 0,
     min_contour_area: float = 1000,
     pixel_size: float = 1,
-    contour_scale: float = 1.0
+    contour_scale: float = 1.0,
 ) -> gpd.GeoDataFrame:
     """
     Convert a binary mask into a GeoDataFrame of polygons representing detected regions.
 
     This function processes a binary mask to identify contours, filter them based on specified parameters,
-    and scale them to the desired dimensions. The output is a GeoDataFrame where each row corresponds 
+    and scale them to the desired dimensions. The output is a GeoDataFrame where each row corresponds
     to a detected region, with polygons representing the tissue contours and their associated holes.
 
     Args:
         mask (np.ndarray): The binary mask to process, where non-zero regions represent areas of interest.
         keep_ids (List[int], optional): A list of contour indices to keep. Defaults to an empty list (keep all).
         exclude_ids (List[int], optional): A list of contour indices to exclude. Defaults to an empty list.
-        max_nb_holes (int, optional): The maximum number of holes to retain for each contour. 
+        max_nb_holes (int, optional): The maximum number of holes to retain for each contour.
             Use 0 to retain no holes. Defaults to 0.
         min_contour_area (float, optional): Minimum area (in pixels) for a contour to be retained. Defaults to 1000.
         pixel_size (float, optional): Pixel size of level 0. Defaults to 1.
@@ -746,20 +772,24 @@ def mask_to_gdf(
         hierarchy = np.squeeze(hierarchy, axis=(0,))[:, 2:]
 
     filter_params = {
-        'filter_color_mode': 'none',
-        'max_n_holes': max_nb_holes,
-        'a_t': min_contour_area * pixel_size ** 2,
-        'min_hole_area': 4000 * pixel_size ** 2
+        "filter_color_mode": "none",
+        "max_n_holes": max_nb_holes,
+        "a_t": min_contour_area * pixel_size**2,
+        "min_hole_area": 4000 * pixel_size**2,
     }
 
-    if filter_params: 
-        foreground_contours, hole_contours = filter_contours(contours, hierarchy, filter_params, pixel_size)  # Necessary for filtering out artifacts
+    if filter_params:
+        foreground_contours, hole_contours = filter_contours(
+            contours, hierarchy, filter_params, pixel_size
+        )  # Necessary for filtering out artifacts
 
     if len(foreground_contours) == 0:
         print(f"[Warning] No contour were detected. Contour GeoJSON will be empty.")
-        return gpd.GeoDataFrame(columns=['tissue_id', 'geometry'])
+        return gpd.GeoDataFrame(columns=["tissue_id", "geometry"])
     else:
-        contours_tissue = scale_contours(foreground_contours, contour_scale / scale, is_nested=False)
+        contours_tissue = scale_contours(
+            foreground_contours, contour_scale / scale, is_nested=False
+        )
         contours_holes = scale_contours(hole_contours, contour_scale / scale, is_nested=True)
 
     if len(keep_ids) > 0:
@@ -770,22 +800,28 @@ def mask_to_gdf(
     tissue_ids = [i for i in contour_ids]
     polygons = []
     for i in contour_ids:
-        holes = [contours_holes[i][j].squeeze(1) for j in range(len(contours_holes[i]))] if len(contours_holes[i]) > 0 else None
+        holes = (
+            [contours_holes[i][j].squeeze(1) for j in range(len(contours_holes[i]))]
+            if len(contours_holes[i]) > 0
+            else None
+        )
         polygon = Polygon(contours_tissue[i].squeeze(1), holes=holes)
         if not polygon.is_valid:
             if not polygon.is_valid:
                 polygon = make_valid(polygon)
         polygons.append(polygon)
-    
-    gdf_contours = gpd.GeoDataFrame(pd.DataFrame(tissue_ids, columns=['tissue_id']), geometry=polygons)
-    
+
+    gdf_contours = gpd.GeoDataFrame(
+        pd.DataFrame(tissue_ids, columns=["tissue_id"]), geometry=polygons
+    )
+
     return gdf_contours
 
 
 def filter_contours(contours, hierarchy, filter_params, pixel_size):
     """
-    The `filter_contours` function processes a list of contours and their hierarchy, filtering 
-    them based on specified criteria such as minimum area and hole limits. This function is 
+    The `filter_contours` function processes a list of contours and their hierarchy, filtering
+    them based on specified criteria such as minimum area and hole limits. This function is
     typically used in digital pathology workflows to isolate meaningful tissue regions.
 
     Original implementation from: https://github.com/mahmoodlab/CLAM/blob/f1e93945d5f5ac6ed077cb020ed01cf984780a77/wsi_core/WholeSlideImage.py#L97
@@ -832,21 +868,20 @@ def filter_contours(contours, hierarchy, filter_params, pixel_size):
 
     # Loop through each foreground contour
     for cont_idx in foreground_indices:
-
         contour = contours[cont_idx]
         hole_indices = np.flatnonzero(hierarchy[:, 1] == cont_idx)
 
         # Calculate area of the contour (foreground area minus holes)
         contour_area = cv2.contourArea(contour)
         hole_areas = [cv2.contourArea(contours[hole_idx]) for hole_idx in hole_indices]
-        net_area = (contour_area - sum(hole_areas)) * (pixel_size ** 2)
+        net_area = (contour_area - sum(hole_areas)) * (pixel_size**2)
 
         # Skip contours with negligible area
-        if net_area <= 0 or net_area <= filter_params['a_t']:
+        if net_area <= 0 or net_area <= filter_params["a_t"]:
             continue
 
         # Filter based on color mode if applicable
-        if filter_params.get('filter_color_mode') not in [None, 'none']:
+        if filter_params.get("filter_color_mode") not in [None, "none"]:
             raise Exception("Unsupported filter_color_mode")
 
         # Append valid contours
@@ -856,9 +891,12 @@ def filter_contours(contours, hierarchy, filter_params, pixel_size):
         valid_holes = [
             contours[hole_idx]
             for hole_idx in hole_indices
-            if cv2.contourArea(contours[hole_idx]) * (pixel_size ** 2) > filter_params['min_hole_area']
+            if cv2.contourArea(contours[hole_idx]) * (pixel_size**2)
+            > filter_params["min_hole_area"]
         ]
-        valid_holes = sorted(valid_holes, key=cv2.contourArea, reverse=True)[:filter_params['max_n_holes']]
+        valid_holes = sorted(valid_holes, key=cv2.contourArea, reverse=True)[
+            : filter_params["max_n_holes"]
+        ]
         filtered_holes.append(valid_holes)
 
     return filtered_foregrounds, filtered_holes
@@ -866,8 +904,8 @@ def filter_contours(contours, hierarchy, filter_params, pixel_size):
 
 def make_valid(polygon):
     """
-    The `make_valid` function attempts to fix invalid polygons by applying small buffer operations. 
-    This is particularly useful in cases where geometric operations result in self-intersecting 
+    The `make_valid` function attempts to fix invalid polygons by applying small buffer operations.
+    This is particularly useful in cases where geometric operations result in self-intersecting
     or malformed polygons.
 
     Parameters:
@@ -892,7 +930,7 @@ def make_valid(polygon):
     >>> print(valid_polygon.is_valid)
     True
     """
-    
+
     for i in [0, 0.1, -0.1, 0.2]:
         new_polygon = polygon.buffer(i)
         if isinstance(new_polygon, Polygon) and new_polygon.is_valid:
@@ -902,7 +940,7 @@ def make_valid(polygon):
 
 def scale_contours(contours, scale, is_nested=False):
     """
-    The `scale_contours` function scales the dimensions of contours or nested contours (e.g., holes) 
+    The `scale_contours` function scales the dimensions of contours or nested contours (e.g., holes)
     by a specified factor. This is useful for resizing detected regions in masks or GeoDataFrames.
 
     Parameters:
@@ -927,16 +965,21 @@ def scale_contours(contours, scale, is_nested=False):
     [array([[0, 0], [2, 2], [2, 0]])]
     """
     if is_nested:
-        return [[np.array(hole * scale, dtype='int32') for hole in holes] for holes in contours]
-    return [np.array(cont * scale, dtype='int32') for cont in contours]
+        return [[np.array(hole * scale, dtype="int32") for hole in holes] for holes in contours]
+    return [np.array(cont * scale, dtype="int32") for cont in contours]
 
 
 def overlay_gdf_on_thumbnail(
-    gdf_contours, thumbnail, contours_saveto, scale, tissue_color=(0, 255, 0), hole_color=(255, 0, 0)
+    gdf_contours,
+    thumbnail,
+    contours_saveto,
+    scale,
+    tissue_color=(0, 255, 0),
+    hole_color=(255, 0, 0),
 ):
     """
-    The `overlay_gdf_on_thumbnail` function overlays polygons from a GeoDataFrame onto a scaled 
-    thumbnail image using OpenCV. This is particularly useful for visualizing tissue regions and 
+    The `overlay_gdf_on_thumbnail` function overlays polygons from a GeoDataFrame onto a scaled
+    thumbnail image using OpenCV. This is particularly useful for visualizing tissue regions and
     their boundaries on smaller representations of whole-slide images.
 
     Parameters:
@@ -962,9 +1005,9 @@ def overlay_gdf_on_thumbnail(
     Example:
     --------
     >>> overlay_gdf_on_thumbnail(
-    ...     gdf_contours=gdf, 
-    ...     thumbnail=thumbnail_img, 
-    ...     contours_saveto="annotated_thumbnail.png", 
+    ...     gdf_contours=gdf,
+    ...     thumbnail=thumbnail_img,
+    ...     contours_saveto="annotated_thumbnail.png",
     ...     scale=0.5
     ... )
     """
@@ -976,31 +1019,35 @@ def overlay_gdf_on_thumbnail(
         # Draw tissue boundary
         if poly.exterior:
             exterior_coords = (np.array(poly.exterior.coords) * scale).astype(np.int32)
-            cv2.polylines(thumbnail, [exterior_coords], isClosed=True, color=tissue_color, thickness=2)
+            cv2.polylines(
+                thumbnail, [exterior_coords], isClosed=True, color=tissue_color, thickness=2
+            )
 
         # Draw holes (if any) in a different color
         if poly.interiors:
             for interior in poly.interiors:
                 interior_coords = (np.array(interior.coords) * scale).astype(np.int32)
-                cv2.polylines(thumbnail, [interior_coords], isClosed=True, color=hole_color, thickness=2)
+                cv2.polylines(
+                    thumbnail, [interior_coords], isClosed=True, color=hole_color, thickness=2
+                )
 
     # Crop black borders of the annotated image
     nz = np.nonzero(cv2.cvtColor(thumbnail, cv2.COLOR_BGR2GRAY))  # Non-zero pixel locations
     xmin, xmax, ymin, ymax = np.min(nz[1]), np.max(nz[1]), np.min(nz[0]), np.max(nz[0])
     cropped_annotated = thumbnail[ymin:ymax, xmin:xmax]
- 
+
     # Save the annotated image
     os.makedirs(os.path.dirname(contours_saveto), exist_ok=True)
     cropped_annotated = cv2.cvtColor(cropped_annotated, cv2.COLOR_BGR2RGB)
     cv2.imwrite(contours_saveto, cropped_annotated)
 
-def get_num_workers(batch_size: int, 
-                    factor: float = 0.75, 
-                    fallback: int = 16, 
-                    max_workers: int | None = None) -> int:
+
+def get_num_workers(
+    batch_size: int, factor: float = 0.75, fallback: int = 16, max_workers: int | None = None
+) -> int:
     """
-    The `get_num_workers` function calculates the optimal number of workers for a PyTorch DataLoader, 
-    balancing system resources and workload. This ensures efficient data loading while avoiding 
+    The `get_num_workers` function calculates the optimal number of workers for a PyTorch DataLoader,
+    balancing system resources and workload. This ensures efficient data loading while avoiding
     resource overutilization.
 
     Parameters:
@@ -1034,12 +1081,12 @@ def get_num_workers(batch_size: int,
     """
 
     # Disable pytorch multiprocessing on Windows
-    if os.name == 'nt':
+    if os.name == "nt":
         return 0
 
     if max_workers is not None and max_workers <= 0:
         return 0
-    
+
     num_cores = os.cpu_count() or fallback
     num_workers = int(factor * num_cores)  # Use a fraction of available cores
     max_workers = max_workers or (2 * batch_size)  # Optional cap

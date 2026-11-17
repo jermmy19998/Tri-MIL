@@ -10,56 +10,51 @@ except ImportError:
 
 
 def read_yaml(fpath=None):
-    with open(fpath, mode="r") as file:
-        yml = yaml.load(file, Loader=yaml.Loader)
+    """Load a UTF-8 YAML mapping without constructing arbitrary Python objects."""
+    with open(fpath, mode="r", encoding="utf-8") as file:
+        yml = yaml.safe_load(file)
+        if not isinstance(yml, dict):
+            raise ValueError("The YAML root must be a mapping.")
         return Dict(yml)
-    
+
+
 def update_config_from_options(config, options):
+    """Apply dotted key=value overrides with YAML scalar, list and boolean parsing."""
     for option in options:
-        key, value = option.split('=')
-        keys = key.split('.')
+        key, value = option.split("=", 1)
+        keys = key.split(".")
         d = config
         for k in keys[:-1]:
             d = d[k]
-        d[keys[-1]] = type(d[keys[-1]])(value)
+        d[keys[-1]] = yaml.safe_load(value)
     return config
 
+
 def change_yaml_by_options(yaml_path, options):
+    """Change yaml by options."""
     if RuamelYAML is not None:
-        yaml_handler = RuamelYAML(typ='rt')
-        with open(yaml_path, 'r', encoding='utf-8') as file:
+        yaml_handler = RuamelYAML(typ="rt")
+        with open(yaml_path, "r", encoding="utf-8") as file:
             config = yaml_handler.load(file)
 
-        for option in options:
-            key, value = option.split('=')
-            keys = key.split('.')
-            d = config
-            for k in keys[:-1]:
-                d = d[k]
-            d[keys[-1]] = type(d[keys[-1]])(value)
+        update_config_from_options(config, options)
 
-        with open(yaml_path, 'w', encoding='utf-8') as file:
+        with open(yaml_path, "w", encoding="utf-8") as file:
             yaml_handler.dump(config, file)
         return
 
-    with open(yaml_path, 'r', encoding='utf-8') as file:
+    with open(yaml_path, "r", encoding="utf-8") as file:
         config = yaml.safe_load(file)
 
-    for option in options:
-        key, value = option.split('=')
-        keys = key.split('.')
-        d = config
-        for k in keys[:-1]:
-            d = d[k]
-        d[keys[-1]] = type(d[keys[-1]])(value)
+    update_config_from_options(config, options)
 
-    with open(yaml_path, 'w', encoding='utf-8') as file:
+    with open(yaml_path, "w", encoding="utf-8") as file:
         yaml.safe_dump(config, file, sort_keys=False, allow_unicode=True)
 
 
-
-def save_yaml(args,yaml_path,options):
-    dst_path = os.path.join(args.Logs.now_log_dir,os.path.basename(yaml_path))
-    shutil.copyfile(yaml_path,dst_path)
+def save_yaml(args, yaml_path, options):
+    """Save yaml."""
+    dst_path = os.path.join(args.Logs.now_log_dir, os.path.basename(yaml_path))
+    shutil.copyfile(yaml_path, dst_path)
     if options != None:
-        change_yaml_by_options(dst_path,options)
+        change_yaml_by_options(dst_path, options)

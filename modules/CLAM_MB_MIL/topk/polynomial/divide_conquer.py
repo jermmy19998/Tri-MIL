@@ -16,8 +16,7 @@ def divide_and_conquer(x, k, mul):
         half = size // 2
         if 2 * half < size:
             to_merge.append([t[-1] for t in x])
-        x = mul([t[:half] for t in x],
-                [t[half: 2 * half] for t in x])
+        x = mul([t[:half] for t in x], [t[half : 2 * half] for t in x])
 
     for row in to_merge:
         x = mul(x, row)

@@ -3,6 +3,7 @@ from typing import Any
 
 from transformers import PretrainedConfig
 
+
 class ConchConfig(PretrainedConfig):
     model_type = "conch"
 
@@ -19,6 +20,7 @@ class ConchConfig(PretrainedConfig):
         pooler_n_queries_contrast: int = 1,
         **kwargs: Any,
     ):
+        """Initialize the ConchConfig instance and configure its dependencies."""
         self.patch_size = patch_size
         self.context_dim = context_dim
         self.embed_dim = embed_dim

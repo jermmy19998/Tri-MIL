@@ -44,6 +44,12 @@ class CZIWSI(WSI):
         self._y0 = 0
         super().__init__(slide_path, **kwargs)
 
+    def __getstate__(self) -> dict:
+        """Also drop the open-file context, which is a live handle like ``img``."""
+        state = super().__getstate__()
+        state["_ctx"] = None
+        return state
+
     def release(self) -> None:
         """Close the underlying CZI reader and release resources."""
         if self._ctx is not None:
@@ -194,7 +200,12 @@ class CZIWSI(WSI):
             raise ValueError(f"Invalid size={size}.")
 
         # Convert TRIDENT coords (0..width/height) to CZI global coordinates.
-        roi = (self._x0 + x, self._y0 + y, int(np.ceil(w * downsample)), int(np.ceil(h * downsample)))
+        roi = (
+            self._x0 + x,
+            self._y0 + y,
+            int(np.ceil(w * downsample)),
+            int(np.ceil(h * downsample)),
+        )
 
         # Read using default plane (C=0, Z=0, T=0). This can be extended later.
         arr = self.img.read(roi=roi, zoom=zoom, plane={"C": 0, "Z": 0, "T": 0})
@@ -257,4 +268,3 @@ class CZIWSI(WSI):
             arr = np.clip(arr, 0, 255).astype(np.uint8)
         arr = arr[:, :, ::-1].copy()  # BGR -> RGB
         return Image.fromarray(arr).convert("RGB").resize(size, resample=Image.Resampling.BICUBIC)
-

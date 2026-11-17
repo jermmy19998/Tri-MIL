@@ -11,13 +11,16 @@ from torch import Tensor
 
 class FairseqIncrementalState(object):
     def __init__(self, *args, **kwargs):
+        """Initialize the FairseqIncrementalState instance and configure its dependencies."""
         super().__init__(*args, **kwargs)
         self.init_incremental_state()
 
     def init_incremental_state(self):
+        """Init incremental state."""
         self._incremental_state_id = str(uuid.uuid4())
 
     def _get_full_incremental_state_key(self, key: str) -> str:
+        """Get full incremental state key."""
         return "{}.{}".format(self._incremental_state_id, key)
 
     def get_incremental_state(
@@ -45,6 +48,7 @@ class FairseqIncrementalState(object):
 
 
 def with_incremental_state(cls):
+    """With incremental state."""
     cls.__bases__ = (FairseqIncrementalState,) + tuple(
         b for b in cls.__bases__ if b != FairseqIncrementalState
     )

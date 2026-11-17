@@ -6,6 +6,7 @@ import torch.nn.functional as F
 
 
 def initialize_weights(module):
+    """Initialize weights."""
     for m in module.modules():
         if isinstance(m, nn.Linear):
             nn.init.xavier_normal_(m.weight)
@@ -17,6 +18,7 @@ def initialize_weights(module):
 
 
 def _get_optional_mamba2():
+    """Get optional mamba2."""
     try:
         from mamba_latest.mamba_ssm import Mamba2
 
@@ -41,16 +43,20 @@ class TorchSequenceBlock(nn.Module):
     """
 
     def __init__(self, hidden_dim=512, d_conv=4, expand=2, dropout=0.0):
+        """Initialize the TorchSequenceBlock instance and configure its dependencies."""
         super().__init__()
         padding = d_conv // 2
         self.norm = nn.LayerNorm(hidden_dim)
-        self.dwconv = nn.Conv1d(hidden_dim, hidden_dim, kernel_size=d_conv, padding=padding, groups=hidden_dim)
+        self.dwconv = nn.Conv1d(
+            hidden_dim, hidden_dim, kernel_size=d_conv, padding=padding, groups=hidden_dim
+        )
         self.gate = nn.Linear(hidden_dim, hidden_dim)
         self.up = nn.Linear(hidden_dim, hidden_dim * expand)
         self.down = nn.Linear(hidden_dim * expand, hidden_dim)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
+        """Compute the TorchSequenceBlock forward pass for the supplied input tensors."""
         residual = x
         x = self.norm(x)
         y = self.dwconv(x.transpose(1, 2)).transpose(1, 2)
@@ -62,6 +68,7 @@ class TorchSequenceBlock(nn.Module):
 
 class Mamba2SequenceBlock(nn.Module):
     def __init__(self, hidden_dim=512, d_state=64, d_conv=4, expand=2):
+        """Initialize the Mamba2SequenceBlock instance and configure its dependencies."""
         super().__init__()
         mamba2 = _get_optional_mamba2()
         if mamba2 is None:
@@ -72,6 +79,7 @@ class Mamba2SequenceBlock(nn.Module):
         self.mamba = mamba2(d_model=hidden_dim, d_state=d_state, d_conv=d_conv, expand=expand)
 
     def forward(self, x):
+        """Compute the Mamba2SequenceBlock forward pass for the supplied input tensors."""
         return x + self.mamba(x)
 
 
@@ -123,6 +131,7 @@ class MO_MIL(nn.Module):
         max_instances=4096,
         sampling="uniform",
     ):
+        """Initialize the MO_MIL instance and configure its dependencies."""
         super().__init__()
         del use_coords
         if second_order_layers is not None:
@@ -132,7 +141,9 @@ class MO_MIL(nn.Module):
         if second_order_type not in {"multi_order_sequence", "self_attn"}:
             raise ValueError("second_order_type must be 'multi_order_sequence' or 'self_attn'")
         if hidden_dim % num_heads != 0:
-            raise ValueError("hidden_dim must be divisible by num_heads for the self_attn ablation branch")
+            raise ValueError(
+                "hidden_dim must be divisible by num_heads for the self_attn ablation branch"
+            )
 
         self.in_dim = in_dim
         self.num_classes = num_classes
@@ -144,14 +155,37 @@ class MO_MIL(nn.Module):
         self.max_instances = max_instances
         self.sampling = sampling
 
-        self.project = nn.Sequential(nn.Linear(in_dim, hidden_dim), nn.LayerNorm(hidden_dim), act, nn.Dropout(dropout))
+        self.project = nn.Sequential(
+            nn.Linear(in_dim, hidden_dim), nn.LayerNorm(hidden_dim), act, nn.Dropout(dropout)
+        )
 
         block_cls = Mamba2SequenceBlock if sequence_layer == "mamba2" else TorchSequenceBlock
         if sequence_layer not in {"mamba2", "torch"}:
             raise ValueError("sequence_layer must be 'torch' or 'mamba2'")
-        self.layers = nn.ModuleList([block_cls(hidden_dim, d_state, d_conv, expand) if sequence_layer == "mamba2" else block_cls(hidden_dim, d_conv, expand, dropout) for _ in range(layer)])
-        self.layers_reverse = nn.ModuleList([block_cls(hidden_dim, d_state, d_conv, expand) if sequence_layer == "mamba2" else block_cls(hidden_dim, d_conv, expand, dropout) for _ in range(layer)])
-        self.layers_transpose = nn.ModuleList([block_cls(hidden_dim, d_state, d_conv, expand) if sequence_layer == "mamba2" else block_cls(hidden_dim, d_conv, expand, dropout) for _ in range(layer)])
+        self.layers = nn.ModuleList(
+            [
+                block_cls(hidden_dim, d_state, d_conv, expand)
+                if sequence_layer == "mamba2"
+                else block_cls(hidden_dim, d_conv, expand, dropout)
+                for _ in range(layer)
+            ]
+        )
+        self.layers_reverse = nn.ModuleList(
+            [
+                block_cls(hidden_dim, d_state, d_conv, expand)
+                if sequence_layer == "mamba2"
+                else block_cls(hidden_dim, d_conv, expand, dropout)
+                for _ in range(layer)
+            ]
+        )
+        self.layers_transpose = nn.ModuleList(
+            [
+                block_cls(hidden_dim, d_state, d_conv, expand)
+                if sequence_layer == "mamba2"
+                else block_cls(hidden_dim, d_conv, expand, dropout)
+                for _ in range(layer)
+            ]
+        )
 
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=hidden_dim,
@@ -192,10 +226,12 @@ class MO_MIL(nn.Module):
 
     @staticmethod
     def _transpose_token_reembedding(x, width):
+        """Transpose token reembedding."""
         b, n, c = x.shape
         return x.reshape(b, -1, width, c).transpose(1, 2).reshape(b, n, c)
 
     def _sample_tokens(self, x, mask):
+        """Sample tokens."""
         n = x.shape[1]
         if self.max_instances is None or self.max_instances <= 0 or n <= self.max_instances:
             return x, mask, None, n
@@ -211,21 +247,32 @@ class MO_MIL(nn.Module):
         return x, mask, idx, n
 
     def _pad_square(self, h, mask):
+        """Pad square."""
         n = h.shape[1]
         side = int(math.ceil(math.sqrt(n)))
         add_length = side * side - n
         if add_length > 0:
             h = torch.cat([h, h[:, :add_length, :]], dim=1)
             if mask is not None:
-                mask = torch.cat([mask, torch.zeros(mask.shape[0], add_length, device=mask.device, dtype=mask.dtype)], dim=1)
+                mask = torch.cat(
+                    [
+                        mask,
+                        torch.zeros(
+                            mask.shape[0], add_length, device=mask.device, dtype=mask.dtype
+                        ),
+                    ],
+                    dim=1,
+                )
         return h, mask, n, side
 
     def _run_layers(self, h, layers):
+        """Run layers."""
         for layer in layers:
             h = layer(h)
         return h
 
     def _masked_attention_pool(self, tokens, attention_module, mask=None):
+        """Masked attention pool."""
         attn_raw = attention_module(tokens).squeeze(-1)
         if mask is not None:
             attn_raw = attn_raw.masked_fill(~mask.bool(), torch.finfo(attn_raw.dtype).min)
@@ -234,6 +281,7 @@ class MO_MIL(nn.Module):
         return pooled, attn_raw, attn
 
     def forward(self, x, mask=None, coords=None, return_WSI_attn=False, return_WSI_feature=False):
+        """Compute the MO_MIL forward pass for the supplied input tensors."""
         del coords
         if x.dim() == 2:
             x = x.unsqueeze(0)
@@ -253,22 +301,30 @@ class MO_MIL(nn.Module):
 
         h1_tokens = h[:, :original_n, :]
         h1_mask = valid_mask[:, :original_n]
-        h1, attn_first_raw, attn_first = self._masked_attention_pool(h1_tokens, self.first_attention, h1_mask)
+        h1, attn_first_raw, attn_first = self._masked_attention_pool(
+            h1_tokens, self.first_attention, h1_mask
+        )
 
         if self.second_order_type == "self_attn":
             encoded = self.self_attn_encoder(h, src_key_padding_mask=~valid_mask)
             h2_tokens = encoded[:, :original_n, :]
-            h2, attn_second_raw, attn_second = self._masked_attention_pool(h2_tokens, self.order_attention, h1_mask)
+            h2, attn_second_raw, attn_second = self._masked_attention_pool(
+                h2_tokens, self.order_attention, h1_mask
+            )
             order_tokens = h2_tokens
             order_mask = h1_mask
         else:
             h_0 = self._run_layers(h, self.layers)
             h_1 = self._run_layers(h.flip([-1]), self.layers_reverse)
-            h_2 = self._run_layers(self._transpose_token_reembedding(h, width), self.layers_transpose)
+            h_2 = self._run_layers(
+                self._transpose_token_reembedding(h, width), self.layers_transpose
+            )
             order_tokens = torch.cat([h_0, h_1, h_2], dim=1)
             order_mask = torch.cat([valid_mask, valid_mask, valid_mask], dim=1)
             order_tokens = self.norm(order_tokens)
-            h2, attn_second_raw, attn_second = self._masked_attention_pool(order_tokens, self.order_attention, order_mask)
+            h2, attn_second_raw, attn_second = self._masked_attention_pool(
+                order_tokens, self.order_attention, order_mask
+            )
 
         if self.fusion_type == "gated":
             gate = self.fusion_gate(torch.cat([h1, h2], dim=-1))
@@ -300,7 +356,12 @@ class MO_MIL(nn.Module):
             else:
                 attn_for_patches = attn_second
             if sampled_idx is not None:
-                full_attn = torch.zeros(attn_for_patches.shape[0], input_n, device=attn_for_patches.device, dtype=attn_for_patches.dtype)
+                full_attn = torch.zeros(
+                    attn_for_patches.shape[0],
+                    input_n,
+                    device=attn_for_patches.device,
+                    dtype=attn_for_patches.dtype,
+                )
                 full_attn.index_copy_(1, sampled_idx, attn_for_patches)
                 attn_for_patches = full_attn
             forward_return["WSI_attn"] = attn_for_patches.squeeze(0).unsqueeze(-1)

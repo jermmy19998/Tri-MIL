@@ -2,6 +2,7 @@
 RET_MIL - Retention-based Multiple Instance Learning
 Reference: https://github.com/Hongbo-Chu/RetMIL
 """
+
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -9,6 +10,7 @@ import numpy as np
 
 
 def get_activation_fn(activation):
+    """Get activation fn."""
     if activation == "swish":
         return F.silu
     elif activation == "gelu":
@@ -18,6 +20,7 @@ def get_activation_fn(activation):
 
 
 def rotate_every_two(x):
+    """Rotate every two."""
     x1 = x[:, :, :, ::2]
     x2 = x[:, :, :, 1::2]
     x = torch.stack((-x2, x1), dim=-1)
@@ -25,11 +28,13 @@ def rotate_every_two(x):
 
 
 def theta_shift(x, sin, cos):
+    """Theta shift."""
     return (x * cos) + (rotate_every_two(x) * sin)
 
 
 class RetNetRelPos(nn.Module):
     def __init__(self, embed_dim, retention_heads, hidden_dim):
+        """Initialize the RetNetRelPos instance and configure its dependencies."""
         super().__init__()
         angle = 1.0 / (10000 ** torch.linspace(0, 1, embed_dim // retention_heads // 2))
         angle = angle.unsqueeze(-1).repeat(1, 2).flatten()
@@ -37,8 +42,9 @@ class RetNetRelPos(nn.Module):
         self.register_buffer("angle", angle)
         self.register_buffer("decay", decay)
         self.recurrent_chunk_size = hidden_dim
-        
+
     def forward(self, slen, activate_recurrent=False, chunkwise_recurrent=False):
+        """Compute the RetNetRelPos forward pass for the supplied input tensors."""
         if activate_recurrent:
             sin = torch.sin(self.angle * (slen - 1))
             cos = torch.cos(self.angle * (slen - 1))
@@ -49,11 +55,15 @@ class RetNetRelPos(nn.Module):
             cos = torch.cos(index[:, None] * self.angle[None, :])
 
             block_index = torch.arange(self.recurrent_chunk_size).to(self.decay)
-            mask = torch.tril(torch.ones(self.recurrent_chunk_size, self.recurrent_chunk_size).to(self.decay))
-            mask = torch.masked_fill(block_index[:, None] - block_index[None, :], ~mask.bool(), float("inf"))
+            mask = torch.tril(
+                torch.ones(self.recurrent_chunk_size, self.recurrent_chunk_size).to(self.decay)
+            )
+            mask = torch.masked_fill(
+                block_index[:, None] - block_index[None, :], ~mask.bool(), float("inf")
+            )
             mask = torch.exp(mask * self.decay[:, None, None])
             mask = torch.nan_to_num(mask)
-            
+
             value_inner_decay = mask[:, -1] / mask[:, -1].sum(dim=-1, keepdim=True)
             value_inner_decay = value_inner_decay.unsqueeze(-1)
             scale = mask.sum(dim=-1, keepdim=True).sqrt()
@@ -61,9 +71,14 @@ class RetNetRelPos(nn.Module):
 
             cross_decay = torch.exp(self.decay * self.recurrent_chunk_size)
             query_inner_decay = torch.exp(self.decay[:, None] * (block_index + 1))
-            query_inner_decay = query_inner_decay[:, :, None] / (scale / mask[:, -1].sum(dim=-1)[:, None, None])
+            query_inner_decay = query_inner_decay[:, :, None] / (
+                scale / mask[:, -1].sum(dim=-1)[:, None, None]
+            )
             cross_decay = cross_decay[:, None, None]
-            retention_rel_pos = ((sin, cos), (inner_mask, cross_decay, query_inner_decay, value_inner_decay))
+            retention_rel_pos = (
+                (sin, cos),
+                (inner_mask, cross_decay, query_inner_decay, value_inner_decay),
+            )
         else:
             index = torch.arange(slen).to(self.decay)
             sin = torch.sin(index[:, None] * self.angle[None, :])
@@ -80,18 +95,21 @@ class RetNetRelPos(nn.Module):
 
 class RMSNorm(nn.Module):
     def __init__(self, dim: int, eps: float = 1e-6, elementwise_affine=True):
+        """Initialize the RMSNorm instance and configure its dependencies."""
         super().__init__()
         self.eps = eps
         self.elementwise_affine = elementwise_affine
         if self.elementwise_affine:
             self.weight = nn.Parameter(torch.ones(dim))
         else:
-            self.register_parameter('weight', None)
+            self.register_parameter("weight", None)
 
     def _norm(self, x):
+        """Norm."""
         return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
 
     def forward(self, x):
+        """Compute the RMSNorm forward pass for the supplied input tensors."""
         output = self._norm(x.float()).type_as(x)
         if self.weight is not None:
             output = output * self.weight
@@ -110,10 +128,8 @@ class Attn_Net_Gated(nn.Module):
             n_classes (int): number of classes
         """
         super(Attn_Net_Gated, self).__init__()
-        self.attention_a = [
-            nn.Linear(L, D),
-            nn.Tanh()]
-        
+        self.attention_a = [nn.Linear(L, D), nn.Tanh()]
+
         self.attention_b = [nn.Linear(L, D), nn.Sigmoid()]
         if dropout:
             self.attention_a.append(nn.Dropout(0.25))
@@ -124,6 +140,7 @@ class Attn_Net_Gated(nn.Module):
         self.attention_c = nn.Linear(D, n_classes)
 
     def forward(self, x):
+        """Compute the Attn_Net_Gated forward pass for the supplied input tensors."""
         a = self.attention_a(x)
         b = self.attention_b(x)
         A = a.mul(b)
@@ -132,26 +149,30 @@ class Attn_Net_Gated(nn.Module):
 
 
 class Retention(nn.Module):
-    def __init__(self, embed_dim, num_heads, gate_fn='swish'):
+    def __init__(self, embed_dim, num_heads, gate_fn="swish"):
+        """Initialize the Retention instance and configure its dependencies."""
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
-        self.head_dim = self.embed_dim // self.num_heads 
+        self.head_dim = self.embed_dim // self.num_heads
 
         self.gate_fn = get_activation_fn(activation=str(gate_fn))
 
-        self.ret_rel_pos = RetNetRelPos(embed_dim=embed_dim, retention_heads=num_heads, hidden_dim=self.embed_dim)
+        self.ret_rel_pos = RetNetRelPos(
+            embed_dim=embed_dim, retention_heads=num_heads, hidden_dim=self.embed_dim
+        )
 
         self.q_proj = nn.Linear(embed_dim, embed_dim, bias=False)
         self.k_proj = nn.Linear(embed_dim, embed_dim, bias=False)
         self.v_proj = nn.Linear(embed_dim, embed_dim, bias=False)
         self.g_proj = nn.Linear(embed_dim, embed_dim, bias=False)
 
-        self.scaling = self.embed_dim ** -0.5
+        self.scaling = self.embed_dim**-0.5
 
         self.group_norm = RMSNorm(self.embed_dim, eps=1e-6, elementwise_affine=False)
-    
+
     def parallel_forward(self, qr, kr, v, mask):
+        """Parallel forward."""
         bsz, tgt_len, embed_dim = v.size()
 
         vr = v.view(bsz, tgt_len, self.num_heads, self.head_dim).transpose(1, 2)
@@ -163,11 +184,14 @@ class Retention(nn.Module):
         output = torch.matmul(qk_mat, vr)
         output = output.transpose(1, 2)
         return output
-    
+
     def forward(self, x):
+        """Compute the Retention forward pass for the supplied input tensors."""
         bsz, tgt_len, _ = x.size()
 
-        (sin, cos), inner_mask = self.ret_rel_pos(slen=tgt_len, activate_recurrent=False, chunkwise_recurrent=False)
+        (sin, cos), inner_mask = self.ret_rel_pos(
+            slen=tgt_len, activate_recurrent=False, chunkwise_recurrent=False
+        )
 
         q = self.q_proj(x)
         k = self.k_proj(x)
@@ -181,7 +205,9 @@ class Retention(nn.Module):
         qr = theta_shift(q, sin, cos)
         kr = theta_shift(k, sin, cos)
 
-        output = self.parallel_forward(qr, kr, v, inner_mask)  # three methods, now just the parallel method
+        output = self.parallel_forward(
+            qr, kr, v, inner_mask
+        )  # three methods, now just the parallel method
 
         output = self.group_norm(output).reshape(bsz, tgt_len, self.head_dim * self.num_heads)
 
@@ -194,27 +220,38 @@ class RetMIL(nn.Module):
     """
     Original RetMIL model (internal use)
     """
+
     def __init__(self, embed_dim, num_heads, chunk_size=512, n_classes=2):
+        """Initialize the RetMIL instance and configure its dependencies."""
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
         self.chunk_size = chunk_size
 
-        self.local_retention = Retention(embed_dim=self.embed_dim, num_heads=self.num_heads, gate_fn='swish')
-        self.local_attn_pool = Attn_Net_Gated(L=self.embed_dim, D=self.embed_dim // 2, dropout=0.25, n_classes=1)
-        self.global_retention = Retention(embed_dim=self.embed_dim, num_heads=self.num_heads, gate_fn='swish')
-        self.global_attn_pool = Attn_Net_Gated(L=self.embed_dim, D=self.embed_dim // 2, dropout=0.25, n_classes=1)
+        self.local_retention = Retention(
+            embed_dim=self.embed_dim, num_heads=self.num_heads, gate_fn="swish"
+        )
+        self.local_attn_pool = Attn_Net_Gated(
+            L=self.embed_dim, D=self.embed_dim // 2, dropout=0.25, n_classes=1
+        )
+        self.global_retention = Retention(
+            embed_dim=self.embed_dim, num_heads=self.num_heads, gate_fn="swish"
+        )
+        self.global_attn_pool = Attn_Net_Gated(
+            L=self.embed_dim, D=self.embed_dim // 2, dropout=0.25, n_classes=1
+        )
         self.classifier = nn.Linear(embed_dim, n_classes, bias=False)
 
     def forward(self, x, return_attn=False):
+        """Compute the RetMIL forward pass for the supplied input tensors."""
         B, N, C = x.shape
 
         chunk_size = self.chunk_size
-        
+
         # Chunk splitting
         _N = (N // chunk_size) * chunk_size
         c_x, r_x = x.split((_N, N - _N), dim=1)  # chunk_x, remain_x
-        
+
         if N - _N != 0:
             # Handle remainder: repeat remainder to fill chunk_size
             full_repeats = chunk_size // (N - _N)
@@ -243,7 +280,9 @@ class RetMIL(nn.Module):
         local_fe_sq_list = []
         for b in range(B):
             local_x_b = local_x[b]  # [num_chunks, chunk_size, C]
-            local_A, local_x_b = self.local_attn_pool(local_x_b)  # local_A: [num_chunks, chunk_size, 1], local_x_b: [num_chunks, chunk_size, C]
+            local_A, local_x_b = self.local_attn_pool(
+                local_x_b
+            )  # local_A: [num_chunks, chunk_size, 1], local_x_b: [num_chunks, chunk_size, C]
             local_A = torch.transpose(local_A, 2, 1)  # [num_chunks, 1, chunk_size]
             local_A = F.softmax(local_A, dim=2)
             local_fe_sq_b = torch.matmul(local_A, local_x_b)  # [num_chunks, 1, C]
@@ -257,7 +296,9 @@ class RetMIL(nn.Module):
         global_A_all = []  # Store global attention weights
         for b in range(B):
             global_x_b = self.global_retention(local_fe_sq[b].unsqueeze(0))  # [1, num_chunks, C]
-            global_A, global_x_b = self.global_attn_pool(global_x_b)  # global_A: [1, num_chunks, 1], global_x_b: [1, num_chunks, C]
+            global_A, global_x_b = self.global_attn_pool(
+                global_x_b
+            )  # global_A: [1, num_chunks, 1], global_x_b: [1, num_chunks, C]
             global_A = torch.transpose(global_A, 2, 1)  # [1, 1, num_chunks]
             global_A = F.softmax(global_A, dim=2)
             global_A_all.append(global_A.squeeze(0).squeeze(0))  # [num_chunks]
@@ -289,7 +330,9 @@ class RetMIL(nn.Module):
                     else:
                         remainder_attn = 1.0 / N
                     attn_b.extend([remainder_attn] * (N - _N))
-                attn_scores_list.append(torch.tensor(attn_b[:N], device=output.device))  # Truncate to original length
+                attn_scores_list.append(
+                    torch.tensor(attn_b[:N], device=output.device)
+                )  # Truncate to original length
             attn_scores = torch.stack(attn_scores_list, dim=0)  # [B, N]
             return output, attn_scores
         else:
@@ -301,40 +344,41 @@ class RET_MIL(nn.Module):
     RET_MIL - Retention-based Multiple Instance Learning
     Framework-adapted wrapper class
     """
-    def __init__(self, in_dim, embed_dim=None, num_classes=2, chunk_len=512, num_heads=8, dropout=0.25):
+
+    def __init__(
+        self, in_dim, embed_dim=None, num_classes=2, chunk_len=512, num_heads=8, dropout=0.25
+    ):
+        """Initialize the RET_MIL instance and configure its dependencies."""
         super().__init__()
         # If embed_dim is not specified, use in_dim
         if embed_dim is None:
             embed_dim = in_dim
-        
+
         self.in_dim = in_dim
         self.embed_dim = embed_dim
         self.num_classes = num_classes
         self.chunk_len = chunk_len
-        
+
         # If in_dim != embed_dim, add projection layer
         if in_dim != embed_dim:
             self.proj = nn.Linear(in_dim, embed_dim)
         else:
             self.proj = None
-        
+
         # Create RetMIL model
         self.retmil = RetMIL(
-            embed_dim=embed_dim,
-            num_heads=num_heads,
-            chunk_size=chunk_len,
-            n_classes=num_classes
+            embed_dim=embed_dim, num_heads=num_heads, chunk_size=chunk_len, n_classes=num_classes
         )
-    
+
     def forward(self, x, return_WSI_attn=False, return_WSI_feature=False):
         """
         Forward pass
-        
+
         Args:
             x: input features, shape [N, D] or [1, N, D]
             return_WSI_attn: whether to return attention weights
             return_WSI_feature: whether to return slide-level feature
-        
+
         Returns:
             dict with keys:
                 - 'logits': classification logits, shape [1, num_classes]
@@ -342,17 +386,17 @@ class RET_MIL(nn.Module):
                 - 'WSI_feature' (optional): slide-level feature
         """
         forward_return = {}
-        
+
         # Input adaptation: [N, D] -> [1, N, D]
         if len(x.shape) == 2:
             x = x.unsqueeze(0)
-        
+
         B, N, D = x.shape
-        
+
         # Project to embed_dim (if needed)
         if self.proj is not None:
             x = self.proj(x)
-        
+
         # Call RetMIL
         if return_WSI_attn:
             logits, attn_scores = self.retmil(x, return_attn=True)  # [B, num_classes], [B, N]
@@ -363,16 +407,16 @@ class RET_MIL(nn.Module):
                 attn_scores = attn_scores[0]  # [N]
         else:
             logits = self.retmil(x, return_attn=False)  # [B, num_classes]
-        
+
         # Output adaptation
-        forward_return['logits'] = logits
-        
+        forward_return["logits"] = logits
+
         if return_WSI_feature:
             # Can extract from RetMIL's intermediate output, but requires modifying RetMIL.forward
             # Return None for now, can be implemented later
-            forward_return['WSI_feature'] = None
-        
+            forward_return["WSI_feature"] = None
+
         if return_WSI_attn:
-            forward_return['WSI_attn'] = attn_scores
-        
+            forward_return["WSI_attn"] = attn_scores
+
         return forward_return

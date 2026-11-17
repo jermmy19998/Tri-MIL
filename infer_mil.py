@@ -36,6 +36,7 @@ warnings.filterwarnings("ignore")
 # 统一提取 logits（兼容 dict / tensor）
 # =====================================================
 def extract_logits(output):
+    """Extract logits."""
     if isinstance(output, dict):
         if "logits" in output:
             return output["logits"]
@@ -47,6 +48,7 @@ def extract_logits(output):
 
 
 def dtfd_predict_logits(feat, model_list, model_args):
+    """Dtfd predict logits."""
     classifier, attention, dim_reduction, att_cls = model_list
     num_groups = int(model_args.num_Group)
     instance_per_group = max(1, int(model_args.total_instance) // num_groups)
@@ -55,14 +57,14 @@ def dtfd_predict_logits(feat, model_list, model_args):
     for sub_features in torch.chunk(feat.squeeze(0), num_groups, dim=0):
         mid_features = dim_reduction(sub_features)
         attention_weights = attention(mid_features).squeeze(0)
-        attended_features = torch.einsum(
-            "ns,n->ns", mid_features, attention_weights
-        )
+        attended_features = torch.einsum("ns,n->ns", mid_features, attention_weights)
         bag_feature = attended_features.sum(dim=0, keepdim=True)
         classifier_weight = list(classifier.parameters())[-2]
-        patch_logits = torch.einsum(
-            "bgf,cf->bcg", attended_features.unsqueeze(0), classifier_weight
-        ).squeeze(0).transpose(0, 1)
+        patch_logits = (
+            torch.einsum("bgf,cf->bcg", attended_features.unsqueeze(0), classifier_weight)
+            .squeeze(0)
+            .transpose(0, 1)
+        )
         patch_probs = torch.softmax(patch_logits, dim=1)
         sort_idx = torch.argsort(patch_probs[:, -1], descending=True)
         count = min(instance_per_group, len(sort_idx))
@@ -70,9 +72,7 @@ def dtfd_predict_logits(feat, model_list, model_args):
 
         if model_args.distill == "MaxMinS":
             bottom_idx = sort_idx[-count:]
-            pseudo_features.append(
-                mid_features.index_select(0, torch.cat([top_idx, bottom_idx]))
-            )
+            pseudo_features.append(mid_features.index_select(0, torch.cat([top_idx, bottom_idx])))
         elif model_args.distill == "MaxS":
             pseudo_features.append(mid_features.index_select(0, top_idx))
         elif model_args.distill == "AFS":
@@ -87,22 +87,41 @@ def dtfd_predict_logits(feat, model_list, model_args):
 # Main
 # =====================================================
 def test(args):
+    """Export classification predictions or scalar survival risks from a checkpoint."""
+    from utils.survival_entry import maybe_run_survival
+
+    if maybe_run_survival(args, "infer"):
+        return
     plain_cfg = read_plain_yaml(args.yaml_path)
-    model_yaml_path = resolve_model_yaml_path(args.yaml_path, plain_cfg if is_pipeline_yaml(plain_cfg) else None)
-    infer_cfg = get_pipeline_section_compat(plain_cfg, "Infer") if is_pipeline_yaml(plain_cfg) else {}
+    model_yaml_path = resolve_model_yaml_path(
+        args.yaml_path, plain_cfg if is_pipeline_yaml(plain_cfg) else None
+    )
+    infer_cfg = (
+        get_pipeline_section_compat(plain_cfg, "Infer") if is_pipeline_yaml(plain_cfg) else {}
+    )
     common_cfg = get_pipeline_section(plain_cfg, "Common") if is_pipeline_yaml(plain_cfg) else {}
 
     yaml_args = read_yaml(model_yaml_path)
     model_name = yaml_args.General.MODEL_NAME
     num_classes = yaml_args.General.num_classes
 
-    dataset_csv_path = args.test_dataset_csv or infer_cfg.get("test_dataset_csv") or common_cfg.get("test_dataset_csv")
+    dataset_csv_path = (
+        args.test_dataset_csv
+        or infer_cfg.get("test_dataset_csv")
+        or common_cfg.get("test_dataset_csv")
+    )
     temp_dir = None
     temp_yaml_path = None
 
     if not dataset_csv_path:
-        feature_dir = args.feature_dir or infer_cfg.get("feature_dir") or common_cfg.get("feature_dir")
-        feature_recursive = args.feature_recursive or bool(infer_cfg.get("feature_recursive")) or bool(common_cfg.get("feature_recursive"))
+        feature_dir = (
+            args.feature_dir or infer_cfg.get("feature_dir") or common_cfg.get("feature_dir")
+        )
+        feature_recursive = (
+            args.feature_recursive
+            or bool(infer_cfg.get("feature_recursive"))
+            or bool(common_cfg.get("feature_recursive"))
+        )
         if not feature_dir:
             raise ValueError("Provide either --test_dataset_csv or --feature_dir for inference.")
         temp_dir = tempfile.mkdtemp(prefix="tri_mil_infer_")
@@ -113,8 +132,14 @@ def test(args):
         )
         print(f"[INFO] Generated internal inference CSV: {dataset_csv_path}")
     else:
-        feature_dir = args.feature_dir or infer_cfg.get("feature_dir") or common_cfg.get("feature_dir")
-        feature_recursive = args.feature_recursive or bool(infer_cfg.get("feature_recursive")) or bool(common_cfg.get("feature_recursive"))
+        feature_dir = (
+            args.feature_dir or infer_cfg.get("feature_dir") or common_cfg.get("feature_dir")
+        )
+        feature_recursive = (
+            args.feature_recursive
+            or bool(infer_cfg.get("feature_recursive"))
+            or bool(common_cfg.get("feature_recursive"))
+        )
 
     first_feature_path = resolve_first_feature_path(
         csv_path=dataset_csv_path,
@@ -124,7 +149,11 @@ def test(args):
     inferred_in_dim = infer_feature_dim(first_feature_path)
 
     runtime_device, device_message = select_runtime_device(
-        args.device if args.device is not None else infer_cfg.get("device", common_cfg.get("device", getattr(yaml_args.General, "device", "auto")))
+        args.device
+        if args.device is not None
+        else infer_cfg.get(
+            "device", common_cfg.get("device", getattr(yaml_args.General, "device", "auto"))
+        )
     )
     print(f"[INFO] {device_message}")
 
@@ -141,7 +170,9 @@ def test(args):
         yaml_device_value = runtime_device.index if runtime_device.index is not None else 0
     config_overrides["General.device"] = yaml_device_value
 
-    runtime_num_classes = args.num_classes if args.num_classes is not None else infer_cfg.get("num_classes")
+    runtime_num_classes = (
+        args.num_classes if args.num_classes is not None else infer_cfg.get("num_classes")
+    )
     if runtime_num_classes is not None:
         config_overrides["General.num_classes"] = runtime_num_classes
 
@@ -191,7 +222,11 @@ def test(args):
 
     # Model
     device = runtime_device
-    model_weight_path = args.model_weight_path or infer_cfg.get("model_weight_path") or common_cfg.get("model_weight_path")
+    model_weight_path = (
+        args.model_weight_path
+        or infer_cfg.get("model_weight_path")
+        or common_cfg.get("model_weight_path")
+    )
     if not model_weight_path:
         raise ValueError("Model weight path is required for infer_mil.")
     checkpoint = load_torch_checkpoint(model_weight_path, map_location=device)
@@ -219,6 +254,7 @@ def test(args):
 
     slide_paths = []
     probs_list = []
+    uncertainty_rows = []
 
     with torch.no_grad():
         for feat, slide_path in test_loader:
@@ -228,6 +264,18 @@ def test(args):
             else:
                 output = model(feat)
                 logits = extract_logits(output)
+                if model_name == "NN_MIL":
+                    uncertainty_rows.append(
+                        {
+                            key: float(output[key].reshape(-1)[0].cpu())
+                            for key in [
+                                "predictive_entropy",
+                                "expected_entropy",
+                                "mutual_information",
+                            ]
+                            if key in output
+                        }
+                    )
 
             if num_classes == 1:
                 prob = torch.sigmoid(logits)
@@ -247,10 +295,15 @@ def test(args):
         y_pred = probs.argmax(axis=1)
 
     # Save CSV
-    df = pd.DataFrame({
-        "wsi_path": slide_paths,
-        "y_pred": y_pred,
-    })
+    df = pd.DataFrame(
+        {
+            "wsi_path": slide_paths,
+            "y_pred": y_pred,
+        }
+    )
+    if uncertainty_rows:
+        for key in uncertainty_rows[0]:
+            df[key] = [row[key] for row in uncertainty_rows]
 
     if probs.ndim == 1 or probs.shape[1] == 1:
         df["prob"] = probs.reshape(-1)
@@ -266,16 +319,31 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--yaml_path", type=str, required=True)
     parser.add_argument("--test_dataset_csv", type=str, default=None)
-    parser.add_argument("--feature_dir", type=str, default=None,
-                        help="Feature directory for folder-first inference. Internal CSV will be generated automatically.")
-    parser.add_argument("--feature_recursive", action="store_true",
-                        help="Recursively scan --feature_dir for feature files.")
+    parser.add_argument(
+        "--feature_dir",
+        type=str,
+        default=None,
+        help="Feature directory for folder-first inference. Internal CSV will be generated automatically.",
+    )
+    parser.add_argument(
+        "--feature_recursive",
+        action="store_true",
+        help="Recursively scan --feature_dir for feature files.",
+    )
     parser.add_argument("--model_weight_path", type=str, default=None)
     parser.add_argument("--test_log_dir", type=str, default=None)
-    parser.add_argument("--device", type=str, default=None,
-                        help="Runtime device override. Examples: auto, cpu, 0, cuda:0.")
-    parser.add_argument("--num_classes", type=int, default=None,
-                        help="Optional runtime override for General.num_classes.")
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        help="Runtime device override. Examples: auto, cpu, 0, cuda:0.",
+    )
+    parser.add_argument(
+        "--num_classes",
+        type=int,
+        default=None,
+        help="Optional runtime override for General.num_classes.",
+    )
     args = parser.parse_args()
 
     test(args)

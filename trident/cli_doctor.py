@@ -12,6 +12,7 @@ from typing import List, Optional
 class CheckResult:
     def __init__(self, status: str, name: str, message: str, fix: str = "") -> None:
         # PASS, WARN, FAIL
+        """Initialize the CheckResult instance and configure its dependencies."""
         self.status = status
         self.name = name
         self.message = message
@@ -19,22 +20,26 @@ class CheckResult:
 
 
 def _has_module(module_name: str) -> bool:
+    """Has module."""
     return importlib.util.find_spec(module_name) is not None
 
 
 def _check_module(module_name: str, message: str, fix: str) -> CheckResult:
+    """Check module."""
     if _has_module(module_name):
         return CheckResult("PASS", message, f"Module `{module_name}` is available.")
     return CheckResult("FAIL", message, f"Module `{module_name}` is missing.", fix)
 
 
 def _check_file(path: Path, message: str, fix: str) -> CheckResult:
+    """Check file."""
     if path.exists():
         return CheckResult("PASS", message, f"Found `{path}`.")
     return CheckResult("FAIL", message, f"Missing `{path}`.", fix)
 
 
 def _check_hf_token() -> CheckResult:
+    """Check hf token."""
     token = None
 
     # Preferred detection path: use huggingface_hub's resolver, which checks
@@ -66,7 +71,10 @@ def _check_hf_token() -> CheckResult:
     )
 
 
-def _check_hf_repo_access(model_name: str, repo_id: str, repo_type: Optional[str] = "model") -> CheckResult:
+def _check_hf_repo_access(
+    model_name: str, repo_id: str, repo_type: Optional[str] = "model"
+) -> CheckResult:
+    """Check hf repo access."""
     try:
         from huggingface_hub import HfApi
         from huggingface_hub.errors import GatedRepoError
@@ -79,11 +87,26 @@ def _check_hf_repo_access(model_name: str, repo_id: str, repo_type: Optional[str
         )
 
     try:
+        from huggingface_hub import get_hf_file_metadata, hf_hub_url
+
         if repo_type == "dataset":
-            HfApi().dataset_info(repo_id=repo_id)
+            info = HfApi().dataset_info(repo_id=repo_id)
         else:
-            HfApi().model_info(repo_id=repo_id)
-        return CheckResult("PASS", f"{model_name} gated access", f"Access check succeeded for `{repo_id}`.")
+            info = HfApi().model_info(repo_id=repo_id)
+
+        # `*_info` returns metadata for gated repos even without access, so it only proves the repo
+        # exists. Confirm the files are actually readable with a HEAD request on one of them.
+        if getattr(info, "gated", False):
+            siblings = [s.rfilename for s in (info.siblings or [])]
+            probe = next(
+                (f for f in ("config.json", ".gitattributes", "README.md") if f in siblings),
+                siblings[0] if siblings else None,
+            )
+            if probe is not None:
+                get_hf_file_metadata(hf_hub_url(repo_id, probe, repo_type=repo_type))
+        return CheckResult(
+            "PASS", f"{model_name} gated access", f"Access check succeeded for `{repo_id}`."
+        )
     except GatedRepoError:
         return CheckResult(
             "WARN",
@@ -100,7 +123,52 @@ def _check_hf_repo_access(model_name: str, repo_id: str, repo_type: Optional[str
         )
 
 
+def _check_flash_attn_gpu() -> CheckResult:
+    """
+    flash-attn is only usable if it was compiled for the current GPU's SM architecture.
+    Releases before 2.7.3 stop at sm_90, so on Blackwell (sm_100/sm_120) the LongNet-based slide
+    encoders fail at their first attention call rather than at import time.
+    """
+    name = "flash-attn / GPU compatibility"
+    try:
+        from packaging.version import Version
+        import flash_attn
+    except Exception:
+        return CheckResult(
+            "WARN",
+            name,
+            "flash_attn is not installed; the GigaPath and PRISM2 slide encoders need it.",
+            "Install with: pip install 'flash_attn>=2.7.3'",
+        )
+
+    version = flash_attn.__version__
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return CheckResult(
+                "PASS", name, f"flash_attn {version} installed (no GPU to check against)."
+            )
+        major, minor = torch.cuda.get_device_capability()
+    except Exception:
+        return CheckResult(
+            "PASS", name, f"flash_attn {version} installed (GPU capability unknown)."
+        )
+
+    if major >= 10 and Version(version) < Version("2.7.3"):
+        return CheckResult(
+            "FAIL",
+            name,
+            f"flash_attn {version} has no kernels for this GPU (sm_{major}{minor}); "
+            "GigaPath/PRISM2 slide encoders will fail at runtime.",
+            f"Install flash_attn >= 2.7.3, e.g. FLASH_ATTN_CUDA_ARCHS={major}{minor} "
+            "pip install --no-build-isolation 'flash-attn>=2.7.3'",
+        )
+    return CheckResult("PASS", name, f"flash_attn {version} supports this GPU (sm_{major}{minor}).")
+
+
 def _check_chief_repo_root(repo_root: Path) -> CheckResult:
+    """Check chief repo root."""
     slide_ckpts = repo_root / "trident" / "slide_encoder_models" / "local_ckpts.json"
     if not slide_ckpts.exists():
         return CheckResult(
@@ -140,6 +208,42 @@ def _check_chief_repo_root(repo_root: Path) -> CheckResult:
     )
 
 
+def _check_bioio_readers() -> CheckResult:
+    """
+    Verify that bioio is installed AND at least one TIFF/OME-TIFF reader plugin
+    is available.
+
+    bioio uses a plugin-per-format model: `bioio` alone (or with only
+    `bioio-imageio`) cannot read TIFF/OME-TIFF, which are the dominant bioformat
+    inputs for the converter. A `import bioio` check therefore passes while the
+    converter is still unable to read any TIFF-family file, so we explicitly
+    require a reader plugin.
+    """
+    if not _has_module("bioio"):
+        return CheckResult(
+            "FAIL",
+            "BioIO dependency",
+            "Module `bioio` is missing.",
+            "Install with: pip install bioio bioio-ome-tiff bioio-tifffile",
+        )
+
+    tiff_readers = [m for m in ("bioio_ome_tiff", "bioio_tifffile") if _has_module(m)]
+    if not tiff_readers:
+        return CheckResult(
+            "FAIL",
+            "BioIO reader plugin",
+            "`bioio` is installed but no TIFF/OME-TIFF reader plugin is available; "
+            "TIFF-family inputs cannot be read (`bioio-imageio` alone is insufficient).",
+            "Install with: pip install bioio-ome-tiff bioio-tifffile",
+        )
+
+    return CheckResult(
+        "PASS",
+        "BioIO dependency",
+        f"`bioio` and TIFF reader plugin(s) available ({', '.join(tiff_readers)}).",
+    )
+
+
 def _check_libvips_runtime() -> CheckResult:
     """
     Verify that pyvips can load system libvips.
@@ -175,6 +279,7 @@ def _check_openslide_runtime() -> CheckResult:
     """
     try:
         import openslide
+
         _ = openslide.__version__
         return CheckResult("PASS", "OpenSlide runtime", "OpenSlide library is available.")
     except Exception:
@@ -187,6 +292,7 @@ def _check_openslide_runtime() -> CheckResult:
 
 
 def run_checks(profile: str, check_gated: bool) -> List[CheckResult]:
+    """Run checks."""
     repo_root = Path(__file__).resolve().parents[1]
     results: List[CheckResult] = []
 
@@ -221,21 +327,45 @@ def run_checks(profile: str, check_gated: bool) -> List[CheckResult]:
         ("Phikon-v2", "owkin/phikon-v2", "model"),
         ("Hibou-L", "histai/hibou-L", "model"),
         ("Prov-GigaPath", "prov-gigapath/prov-gigapath", "model"),
+        ("Prov-GigaPath-Flash", "prov-gigapath/prov-gigapath-flash", "model"),
         ("Midnight", "kaiko-ai/midnight", "model"),
+        ("Phaet", "wearewaiv/phaet", "model"),
+        ("Mascaret", "wearewaiv/mascaret", "model"),
         ("OpenMidnight", "SophontAI/OpenMidnight", "model"),
         ("GPFM", "majiabo/GPFM", "model"),
         ("Lunit vits8", "1aurent/vit_small_patch8_224.lunit_dino", "model"),
-        ("Kaiko vit-small-8", "1aurent/vit_small_patch8_224.kaiko_ai_towards_large_pathology_fms", "model"),
-        ("Kaiko vit-small-16", "1aurent/vit_small_patch16_224.kaiko_ai_towards_large_pathology_fms", "model"),
-        ("Kaiko vit-base-8", "1aurent/vit_base_patch8_224.kaiko_ai_towards_large_pathology_fms", "model"),
-        ("Kaiko vit-base-16", "1aurent/vit_base_patch16_224.kaiko_ai_towards_large_pathology_fms", "model"),
-        ("Kaiko vit-large-14", "1aurent/vit_large_patch14_reg4_dinov2.kaiko_ai_towards_large_pathology_fms", "model"),
+        (
+            "Kaiko vit-small-8",
+            "1aurent/vit_small_patch8_224.kaiko_ai_towards_large_pathology_fms",
+            "model",
+        ),
+        (
+            "Kaiko vit-small-16",
+            "1aurent/vit_small_patch16_224.kaiko_ai_towards_large_pathology_fms",
+            "model",
+        ),
+        (
+            "Kaiko vit-base-8",
+            "1aurent/vit_base_patch8_224.kaiko_ai_towards_large_pathology_fms",
+            "model",
+        ),
+        (
+            "Kaiko vit-base-16",
+            "1aurent/vit_base_patch16_224.kaiko_ai_towards_large_pathology_fms",
+            "model",
+        ),
+        (
+            "Kaiko vit-large-14",
+            "1aurent/vit_large_patch14_reg4_dinov2.kaiko_ai_towards_large_pathology_fms",
+            "model",
+        ),
         ("ResNet50 (timm)", "timm/resnet50.tv_in1k", "model"),
         ("CTransPath weights", "MahmoodLab/hest-bench", "dataset"),
     ]
 
     slide_gated_repos = [
         ("PRISM", "paige-ai/Prism", "model"),
+        ("PRISM2", "paige-ai/Prism2", "model"),
         ("Titan", "MahmoodLab/TITAN", "model"),
         ("Feather", "MahmoodLab/abmil.base.conch_v15.pc108-24k", "model"),
     ]
@@ -262,7 +392,10 @@ def run_checks(profile: str, check_gated: bool) -> List[CheckResult]:
         )
         if check_gated:
             results.append(_check_hf_token())
-            results.extend(_check_hf_repo_access(name, repo, repo_type=repo_type) for name, repo, repo_type in patch_gated_repos)
+            results.extend(
+                _check_hf_repo_access(name, repo, repo_type=repo_type)
+                for name, repo, repo_type in patch_gated_repos
+            )
 
     if profile in {"slide-encoders", "full"}:
         results.extend(
@@ -270,7 +403,7 @@ def run_checks(profile: str, check_gated: bool) -> List[CheckResult]:
                 _check_module(
                     "environs",
                     "PRISM dependency",
-                    "Install with: pip install environs==11.0.0 transformers==4.42.4 sacremoses==0.1.1",
+                    "Install with: pip install environs==11.0.0 sacremoses==0.1.1 'transformers>=4.51,<5'",
                 ),
                 _check_module(
                     "gigapath",
@@ -283,19 +416,19 @@ def run_checks(profile: str, check_gated: bool) -> List[CheckResult]:
                     "Install with: pip install git+https://github.com/mahmoodlab/MADELEINE.git",
                 ),
                 _check_chief_repo_root(repo_root),
+                _check_flash_attn_gpu(),
             ]
         )
         if check_gated:
-            results.extend(_check_hf_repo_access(name, repo, repo_type=repo_type) for name, repo, repo_type in slide_gated_repos)
+            results.extend(
+                _check_hf_repo_access(name, repo, repo_type=repo_type)
+                for name, repo, repo_type in slide_gated_repos
+            )
 
     if profile in {"convert", "full"}:
         results.extend(
             [
-                _check_module(
-                    "aicsimageio",
-                    "AICSImageIO dependency",
-                    "Install with: pip install aicsimageio",
-                ),
+                _check_bioio_readers(),
                 _check_libvips_runtime(),
             ]
         )
@@ -314,10 +447,12 @@ def run_checks(profile: str, check_gated: bool) -> List[CheckResult]:
 
 
 def _status_order(status: str) -> int:
+    """Status order."""
     return {"FAIL": 0, "WARN": 1, "PASS": 2}.get(status, 3)
 
 
 def _summarize(results: List[CheckResult]) -> dict:
+    """Summarize."""
     failed = sum(1 for x in results if x.status == "FAIL")
     warned = sum(1 for x in results if x.status == "WARN")
     passed = sum(1 for x in results if x.status == "PASS")
@@ -330,6 +465,7 @@ def _summarize(results: List[CheckResult]) -> dict:
 
 
 def _print_text_results(results: List[CheckResult], profile: str) -> int:
+    """Print text results."""
     summary = _summarize(results)
     sorted_results = sorted(results, key=lambda x: (_status_order(x.status), x.name.lower()))
     grouped = {"FAIL": [], "WARN": [], "PASS": []}
@@ -373,6 +509,7 @@ def _print_text_results(results: List[CheckResult], profile: str) -> int:
 
 
 def _print_json_results(results: List[CheckResult], profile: str) -> int:
+    """Print json results."""
     summary = _summarize(results)
     payload = {
         "profile": profile,
@@ -392,6 +529,7 @@ def _print_json_results(results: List[CheckResult], profile: str) -> int:
 
 
 def main() -> None:
+    """Run the command-line workflow defined by this module."""
     parser = argparse.ArgumentParser(
         prog="trident-doctor",
         description="Preflight checks for TRIDENT optional dependencies and configuration.",

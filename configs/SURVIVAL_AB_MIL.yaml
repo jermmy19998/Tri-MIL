@@ -1,0 +1,31 @@
+General:
+  task: survival
+  MODEL_NAME: AB_MIL
+  seed: 2024
+  num_classes: 1
+  num_epochs: 30
+  device: auto
+  num_workers: 0
+  best_model_metric: cindex
+  earlystop:
+    use: true
+    patience: 10
+    metric: cindex
+Dataset:
+  DATASET_NAME: survival
+  dataset_csv_path: ./datasets/survival_splits.csv
+  dataset_root_dir: null
+Logs:
+  log_root_dir: ./log_dir/survival
+Model:
+  in_dim: 1024
+  L: 512
+  D: 128
+  dropout: 0.1
+  act: relu
+  criterion: cox
+  optimizer:
+    which: adam
+    adam_config:
+      lr: 0.0002
+      weight_decay: 0.00001

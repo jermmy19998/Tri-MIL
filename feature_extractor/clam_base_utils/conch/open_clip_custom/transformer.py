@@ -8,12 +8,16 @@ from torch import nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
 
+
 class LayerNormFp32(nn.LayerNorm):
     """Subclass torch's LayerNorm to handle fp16 (by casting to float32 and back)."""
 
     def forward(self, x: torch.Tensor):
+        """Compute the LayerNormFp32 forward pass for the supplied input tensors."""
         orig_type = x.dtype
-        x = F.layer_norm(x.to(torch.float32), self.normalized_shape, self.weight, self.bias, self.eps)
+        x = F.layer_norm(
+            x.to(torch.float32), self.normalized_shape, self.weight, self.bias, self.eps
+        )
         return x.to(orig_type)
 
 
@@ -21,6 +25,7 @@ class LayerNorm(nn.LayerNorm):
     """Subclass torch's LayerNorm (with cast back to input dtype)."""
 
     def forward(self, x: torch.Tensor):
+        """Compute the LayerNorm forward pass for the supplied input tensors."""
         orig_type = x.dtype
         x = F.layer_norm(x, self.normalized_shape, self.weight, self.bias, self.eps)
         return x.to(orig_type)
@@ -29,16 +34,19 @@ class LayerNorm(nn.LayerNorm):
 class QuickGELU(nn.Module):
     # NOTE This is slower than nn.GELU or nn.SiLU and uses more GPU memory
     def forward(self, x: torch.Tensor):
+        """Compute the QuickGELU forward pass for the supplied input tensors."""
         return x * torch.sigmoid(1.702 * x)
 
 
 class LayerScale(nn.Module):
     def __init__(self, dim, init_values=1e-5, inplace=False):
+        """Initialize the LayerScale instance and configure its dependencies."""
         super().__init__()
         self.inplace = inplace
         self.gamma = nn.Parameter(init_values * torch.ones(dim))
 
     def forward(self, x):
+        """Compute the LayerScale forward pass for the supplied input tensors."""
         return x.mul_(self.gamma) if self.inplace else x * self.gamma
 
 
@@ -48,13 +56,15 @@ class PatchDropout(nn.Module):
     """
 
     def __init__(self, prob, exclude_first_token=True):
+        """Initialize the PatchDropout instance and configure its dependencies."""
         super().__init__()
-        assert 0 <= prob < 1.
+        assert 0 <= prob < 1.0
         self.prob = prob
         self.exclude_first_token = exclude_first_token  # exclude CLS token
 
     def forward(self, x):
-        if not self.training or self.prob == 0.:
+        """Compute the PatchDropout forward pass for the supplied input tensors."""
+        if not self.training or self.prob == 0.0:
             return x
 
         if self.exclude_first_token:
@@ -84,23 +94,24 @@ class PatchDropout(nn.Module):
 
 class Attention(nn.Module):
     def __init__(
-            self,
-            dim,
-            num_heads=8,
-            qkv_bias=True,
-            scaled_cosine=False,
-            scale_heads=False,
-            logit_scale_max=math.log(1. / 0.01),
-            attn_drop=0.,
-            proj_drop=0.
+        self,
+        dim,
+        num_heads=8,
+        qkv_bias=True,
+        scaled_cosine=False,
+        scale_heads=False,
+        logit_scale_max=math.log(1.0 / 0.01),
+        attn_drop=0.0,
+        proj_drop=0.0,
     ):
+        """Initialize the Attention instance and configure its dependencies."""
         super().__init__()
         self.scaled_cosine = scaled_cosine
         self.scale_heads = scale_heads
-        assert dim % num_heads == 0, 'dim should be divisible by num_heads'
+        assert dim % num_heads == 0, "dim should be divisible by num_heads"
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
-        self.scale = self.head_dim ** -0.5
+        self.scale = self.head_dim**-0.5
         self.logit_scale_max = logit_scale_max
 
         # keeping in_proj in this form (instead of nn.Linear) to match weight scheme of original
@@ -123,6 +134,7 @@ class Attention(nn.Module):
         self.out_drop = nn.Dropout(proj_drop)
 
     def forward(self, x, attn_mask: Optional[torch.Tensor] = None):
+        """Compute the Attention forward pass for the supplied input tensors."""
         L, N, C = x.shape
         q, k, v = F.linear(x, self.in_proj_weight, self.in_proj_bias).chunk(3, dim=-1)
         q = q.contiguous().view(L, N * self.num_heads, -1).transpose(0, 1)
@@ -160,13 +172,14 @@ class Attention(nn.Module):
 
 class AttentionalPooler(nn.Module):
     def __init__(
-            self,
-            d_model: int,
-            context_dim: int,
-            n_head: int = 8,
-            n_queries: int = 256,
-            norm_layer: Callable = LayerNorm
+        self,
+        d_model: int,
+        context_dim: int,
+        n_head: int = 8,
+        n_queries: int = 256,
+        norm_layer: Callable = LayerNorm,
     ):
+        """Initialize the AttentionalPooler instance and configure its dependencies."""
         super().__init__()
         self.query = nn.Parameter(torch.randn(n_queries, d_model))
         self.attn = nn.MultiheadAttention(d_model, n_head, kdim=context_dim, vdim=context_dim)
@@ -174,6 +187,7 @@ class AttentionalPooler(nn.Module):
         self.ln_k = norm_layer(context_dim)
 
     def forward(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None):
+        """Compute the AttentionalPooler forward pass for the supplied input tensors."""
         x = self.ln_k(x).permute(1, 0, 2)  # NLD -> LND
         N = x.shape[1]
         q = self.ln_q(self.query)
@@ -185,103 +199,126 @@ class AttentionalPooler(nn.Module):
         return out.permute(1, 0, 2)  # LND -> NLD
 
     def _repeat(self, query, N: int):
+        """Repeat."""
         return query.unsqueeze(1).repeat(1, N, 1)
 
 
 class ResidualAttentionBlock(nn.Module):
     def __init__(
-            self,
-            d_model: int,
-            n_head: int,
-            mlp_ratio: float = 4.0,
-            ls_init_value: float = None,
-            act_layer: Callable = nn.GELU,
-            norm_layer: Callable = LayerNorm,
-            is_cross_attention: bool = False,
+        self,
+        d_model: int,
+        n_head: int,
+        mlp_ratio: float = 4.0,
+        ls_init_value: float = None,
+        act_layer: Callable = nn.GELU,
+        norm_layer: Callable = LayerNorm,
+        is_cross_attention: bool = False,
     ):
+        """Initialize the ResidualAttentionBlock instance and configure its dependencies."""
         super().__init__()
 
         self.ln_1 = norm_layer(d_model)
         self.attn = nn.MultiheadAttention(d_model, n_head)
-        self.ls_1 = LayerScale(d_model, ls_init_value) if ls_init_value is not None else nn.Identity()
+        self.ls_1 = (
+            LayerScale(d_model, ls_init_value) if ls_init_value is not None else nn.Identity()
+        )
         if is_cross_attention:
             self.ln_1_kv = norm_layer(d_model)
 
         self.ln_2 = norm_layer(d_model)
         mlp_width = int(d_model * mlp_ratio)
-        self.mlp = nn.Sequential(OrderedDict([
-            ("c_fc", nn.Linear(d_model, mlp_width)),
-            ("gelu", act_layer()),
-            ("c_proj", nn.Linear(mlp_width, d_model))
-        ]))
-        self.ls_2 = LayerScale(d_model, ls_init_value) if ls_init_value is not None else nn.Identity()
+        self.mlp = nn.Sequential(
+            OrderedDict(
+                [
+                    ("c_fc", nn.Linear(d_model, mlp_width)),
+                    ("gelu", act_layer()),
+                    ("c_proj", nn.Linear(mlp_width, d_model)),
+                ]
+            )
+        )
+        self.ls_2 = (
+            LayerScale(d_model, ls_init_value) if ls_init_value is not None else nn.Identity()
+        )
 
     def attention(
-            self,
-            q_x: torch.Tensor,
-            k_x: Optional[torch.Tensor] = None,
-            v_x: Optional[torch.Tensor] = None,
-            attn_mask: Optional[torch.Tensor] = None,
+        self,
+        q_x: torch.Tensor,
+        k_x: Optional[torch.Tensor] = None,
+        v_x: Optional[torch.Tensor] = None,
+        attn_mask: Optional[torch.Tensor] = None,
     ):
+        """Attention."""
         k_x = k_x if k_x is not None else q_x
         v_x = v_x if v_x is not None else q_x
 
         attn_mask = attn_mask.to(q_x.dtype) if attn_mask is not None else None
-        return self.attn(
-            q_x, k_x, v_x, need_weights=False, attn_mask=attn_mask
-        )[0]
+        return self.attn(q_x, k_x, v_x, need_weights=False, attn_mask=attn_mask)[0]
 
     def forward(
-            self,
-            q_x: torch.Tensor,
-            k_x: Optional[torch.Tensor] = None,
-            v_x: Optional[torch.Tensor] = None,
-            attn_mask: Optional[torch.Tensor] = None,
+        self,
+        q_x: torch.Tensor,
+        k_x: Optional[torch.Tensor] = None,
+        v_x: Optional[torch.Tensor] = None,
+        attn_mask: Optional[torch.Tensor] = None,
     ):
+        """Compute the ResidualAttentionBlock forward pass for the supplied input tensors."""
         k_x = self.ln_1_kv(k_x) if hasattr(self, "ln_1_kv") and k_x is not None else None
         v_x = self.ln_1_kv(v_x) if hasattr(self, "ln_1_kv") and v_x is not None else None
 
-        x = q_x + self.ls_1(self.attention(q_x=self.ln_1(q_x), k_x=k_x, v_x=v_x, attn_mask=attn_mask))
+        x = q_x + self.ls_1(
+            self.attention(q_x=self.ln_1(q_x), k_x=k_x, v_x=v_x, attn_mask=attn_mask)
+        )
         x = x + self.ls_2(self.mlp(self.ln_2(x)))
         return x
 
 
 class CustomResidualAttentionBlock(nn.Module):
     def __init__(
-            self,
-            d_model: int,
-            n_head: int,
-            mlp_ratio: float = 4.0,
-            ls_init_value: float = None,
-            act_layer: Callable = nn.GELU,
-            norm_layer: Callable = LayerNorm,
-            scale_cosine_attn: bool = False,
-            scale_heads: bool = False,
-            scale_attn: bool = False,
-            scale_fc: bool = False,
+        self,
+        d_model: int,
+        n_head: int,
+        mlp_ratio: float = 4.0,
+        ls_init_value: float = None,
+        act_layer: Callable = nn.GELU,
+        norm_layer: Callable = LayerNorm,
+        scale_cosine_attn: bool = False,
+        scale_heads: bool = False,
+        scale_attn: bool = False,
+        scale_fc: bool = False,
     ):
+        """Initialize the CustomResidualAttentionBlock instance and configure its dependencies."""
         super().__init__()
 
         self.ln_1 = norm_layer(d_model)
         self.attn = Attention(
-            d_model, n_head,
+            d_model,
+            n_head,
             scaled_cosine=scale_cosine_attn,
             scale_heads=scale_heads,
         )
         self.ln_attn = norm_layer(d_model) if scale_attn else nn.Identity()
-        self.ls_1 = LayerScale(d_model, ls_init_value) if ls_init_value is not None else nn.Identity()
+        self.ls_1 = (
+            LayerScale(d_model, ls_init_value) if ls_init_value is not None else nn.Identity()
+        )
 
         self.ln_2 = norm_layer(d_model)
         mlp_width = int(d_model * mlp_ratio)
-        self.mlp = nn.Sequential(OrderedDict([
-            ("c_fc", nn.Linear(d_model, mlp_width)),
-            ('ln', norm_layer(mlp_width) if scale_fc else nn.Identity()),
-            ("gelu", act_layer()),
-            ("c_proj", nn.Linear(mlp_width, d_model))
-        ]))
-        self.ls_2 = LayerScale(d_model, ls_init_value) if ls_init_value is not None else nn.Identity()
+        self.mlp = nn.Sequential(
+            OrderedDict(
+                [
+                    ("c_fc", nn.Linear(d_model, mlp_width)),
+                    ("ln", norm_layer(mlp_width) if scale_fc else nn.Identity()),
+                    ("gelu", act_layer()),
+                    ("c_proj", nn.Linear(mlp_width, d_model)),
+                ]
+            )
+        )
+        self.ls_2 = (
+            LayerScale(d_model, ls_init_value) if ls_init_value is not None else nn.Identity()
+        )
 
     def forward(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None):
+        """Compute the CustomResidualAttentionBlock forward pass for the supplied input tensors."""
         x = x + self.ls_1(self.ln_attn(self.attn(self.ln_1(x), attn_mask=attn_mask)))
         x = x + self.ls_2(self.mlp(self.ln_2(x)))
         return x
@@ -289,31 +326,42 @@ class CustomResidualAttentionBlock(nn.Module):
 
 class Transformer(nn.Module):
     def __init__(
-            self,
-            width: int,
-            layers: int,
-            heads: int,
-            mlp_ratio: float = 4.0,
-            ls_init_value: float = None,
-            act_layer: Callable = nn.GELU,
-            norm_layer: Callable = LayerNorm,
+        self,
+        width: int,
+        layers: int,
+        heads: int,
+        mlp_ratio: float = 4.0,
+        ls_init_value: float = None,
+        act_layer: Callable = nn.GELU,
+        norm_layer: Callable = LayerNorm,
     ):
+        """Initialize the Transformer instance and configure its dependencies."""
         super().__init__()
         self.width = width
         self.layers = layers
         self.grad_checkpointing = False
         self.heads = heads
 
-        self.resblocks = nn.ModuleList([
-            ResidualAttentionBlock(
-                width, heads, mlp_ratio, ls_init_value=ls_init_value, act_layer=act_layer, norm_layer=norm_layer)
-            for _ in range(layers)
-        ])
+        self.resblocks = nn.ModuleList(
+            [
+                ResidualAttentionBlock(
+                    width,
+                    heads,
+                    mlp_ratio,
+                    ls_init_value=ls_init_value,
+                    act_layer=act_layer,
+                    norm_layer=norm_layer,
+                )
+                for _ in range(layers)
+            ]
+        )
 
     def get_cast_dtype(self) -> torch.dtype:
+        """Get cast dtype."""
         return self.resblocks[0].mlp.c_fc.weight.dtype
 
     def forward(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None):
+        """Compute the Transformer forward pass for the supplied input tensors."""
         for r in self.resblocks:
             if self.grad_checkpointing and not torch.jit.is_scripting():
                 # TODO: handle kwargs https://github.com/pytorch/pytorch/issues/79887#issuecomment-1161758372
@@ -322,24 +370,26 @@ class Transformer(nn.Module):
                 x = r(x, attn_mask=attn_mask)
         return x
 
+
 class TextTransformer(nn.Module):
     output_tokens: torch.jit.Final[bool]
 
     def __init__(
-            self,
-            context_length: int = 77,
-            vocab_size: int = 49408,
-            width: int = 512,
-            heads: int = 8,
-            layers: int = 12,
-            ls_init_value: float = None,
-            output_dim: int = 512,
-            act_layer: Callable = nn.GELU,
-            norm_layer: Callable = LayerNorm,
-            embed_cls: bool = False,
-            pad_id: int = 0,
-            output_tokens: bool = False,
+        self,
+        context_length: int = 77,
+        vocab_size: int = 49408,
+        width: int = 512,
+        heads: int = 8,
+        layers: int = 12,
+        ls_init_value: float = None,
+        output_dim: int = 512,
+        act_layer: Callable = nn.GELU,
+        norm_layer: Callable = LayerNorm,
+        embed_cls: bool = False,
+        pad_id: int = 0,
+        output_tokens: bool = False,
     ):
+        """Initialize the TextTransformer instance and configure its dependencies."""
         super().__init__()
         self.output_tokens = output_tokens
         self.num_pos = self.context_length = context_length
@@ -369,18 +419,19 @@ class TextTransformer(nn.Module):
         )
         self.ln_final = norm_layer(width)
 
-        self.register_buffer('attn_mask', self.build_attention_mask(), persistent=False)
+        self.register_buffer("attn_mask", self.build_attention_mask(), persistent=False)
 
         self.init_parameters()
 
     def init_parameters(self):
+        """Init parameters."""
         nn.init.normal_(self.token_embedding.weight, std=0.02)
         nn.init.normal_(self.positional_embedding, std=0.01)
         if self.cls_emb is not None:
             nn.init.normal_(self.cls_emb, std=0.01)
 
-        proj_std = (self.transformer.width ** -0.5) * ((2 * self.transformer.layers) ** -0.5)
-        attn_std = self.transformer.width ** -0.5
+        proj_std = (self.transformer.width**-0.5) * ((2 * self.transformer.layers) ** -0.5)
+        attn_std = self.transformer.width**-0.5
         fc_std = (2 * self.transformer.width) ** -0.5
         for block in self.transformer.resblocks:
             nn.init.normal_(block.attn.in_proj_weight, std=attn_std)
@@ -389,21 +440,24 @@ class TextTransformer(nn.Module):
             nn.init.normal_(block.mlp.c_proj.weight, std=proj_std)
 
         if self.text_projection is not None:
-            nn.init.normal_(self.text_projection, std=self.transformer.width ** -0.5)
+            nn.init.normal_(self.text_projection, std=self.transformer.width**-0.5)
 
     @torch.jit.ignore
     def set_grad_checkpointing(self, enable=True):
+        """Set grad checkpointing."""
         self.transformer.grad_checkpointing = enable
 
     def build_attention_mask(self):
         # lazily create causal attention mask, with full attention between the tokens
         # pytorch uses additive attention mask; fill with -inf
+        """Build attention mask."""
         mask = torch.empty(self.num_pos, self.num_pos)
         mask.fill_(float("-inf"))
         mask.triu_(1)  # zero out the lower diagonal
         return mask
 
     def build_cls_mask(self, text, cast_dtype: torch.dtype):
+        """Build cls mask."""
         cls_mask = (text != self.pad_id).unsqueeze(1)
         cls_mask = F.pad(cls_mask, (1, 0, cls_mask.shape[2], 0), value=1.0)
         additive_mask = torch.empty(cls_mask.shape, dtype=cast_dtype, device=cls_mask.device)
@@ -411,11 +465,13 @@ class TextTransformer(nn.Module):
         additive_mask.masked_fill_(~cls_mask, float("-inf"))
         additive_mask = torch.repeat_interleave(additive_mask, self.heads, 0)
         return additive_mask
-    
+
     def _repeat(self, t, N: int):
+        """Repeat."""
         return t.reshape(1, 1, -1).repeat(N, 1, 1)
 
     def forward(self, text):
+        """Compute the TextTransformer forward pass for the supplied input tensors."""
         cast_dtype = self.transformer.get_cast_dtype()
         seq_len = text.shape[1]
         x = self.token_embedding(text).to(cast_dtype)  # [batch_size, n_ctx, d_model]
@@ -451,19 +507,19 @@ class TextTransformer(nn.Module):
 
 class MultimodalTransformer(Transformer):
     def __init__(
-            self,
-            width: int,
-            layers: int,
-            heads: int,
-            context_length: int = 77,
-            mlp_ratio: float = 4.0,
-            ls_init_value: float = None,
-            act_layer: Callable = nn.GELU,
-            norm_layer: Callable = LayerNorm,
-            output_dim: int = 512,
-            mask_prob: float = 0.
+        self,
+        width: int,
+        layers: int,
+        heads: int,
+        context_length: int = 77,
+        mlp_ratio: float = 4.0,
+        ls_init_value: float = None,
+        act_layer: Callable = nn.GELU,
+        norm_layer: Callable = LayerNorm,
+        output_dim: int = 512,
+        mask_prob: float = 0.0,
     ):
-
+        """Initialize the MultimodalTransformer instance and configure its dependencies."""
         super().__init__(
             width=width,
             layers=layers,
@@ -474,20 +530,22 @@ class MultimodalTransformer(Transformer):
             norm_layer=norm_layer,
         )
         self.context_length = context_length
-        self.cross_attn = nn.ModuleList([
-            ResidualAttentionBlock(
-                width,
-                heads,
-                mlp_ratio,
-                ls_init_value=ls_init_value,
-                act_layer=act_layer,
-                norm_layer=norm_layer,
-                is_cross_attention=True,
-            )
-            for _ in range(layers)
-        ])
+        self.cross_attn = nn.ModuleList(
+            [
+                ResidualAttentionBlock(
+                    width,
+                    heads,
+                    mlp_ratio,
+                    ls_init_value=ls_init_value,
+                    act_layer=act_layer,
+                    norm_layer=norm_layer,
+                    is_cross_attention=True,
+                )
+                for _ in range(layers)
+            ]
+        )
 
-        self.register_buffer('attn_mask', self.build_attention_mask(), persistent=False)
+        self.register_buffer("attn_mask", self.build_attention_mask(), persistent=False)
 
         self.ln_final = norm_layer(width)
         self.text_projection = nn.Parameter(torch.empty(width, output_dim))
@@ -495,8 +553,9 @@ class MultimodalTransformer(Transformer):
         self.mask_prob = mask_prob
 
     def init_parameters(self):
-        proj_std = (self.transformer.width ** -0.5) * ((2 * self.transformer.layers) ** -0.5)
-        attn_std = self.transformer.width ** -0.5
+        """Init parameters."""
+        proj_std = (self.transformer.width**-0.5) * ((2 * self.transformer.layers) ** -0.5)
+        attn_std = self.transformer.width**-0.5
         fc_std = (2 * self.transformer.width) ** -0.5
         for block in self.transformer.resblocks:
             nn.init.normal_(block.attn.in_proj_weight, std=attn_std)
@@ -510,41 +569,45 @@ class MultimodalTransformer(Transformer):
             nn.init.normal_(block.mlp.c_proj.weight, std=proj_std)
 
         if self.text_projection is not None:
-            nn.init.normal_(self.text_projection, std=self.transformer.width ** -0.5)
+            nn.init.normal_(self.text_projection, std=self.transformer.width**-0.5)
 
     def build_attention_mask(self):
         # lazily create causal attention mask, with full attention between the tokens
         # pytorch uses additive attention mask; fill with -inf
+        """Build attention mask."""
         mask = torch.empty(self.context_length, self.context_length)
         mask.fill_(float("-inf"))
         mask.triu_(1)  # zero out the lower diagonal
         return mask
-    
-    def set_mask_prob(self, mask_prob = 0.):
+
+    def set_mask_prob(self, mask_prob=0.0):
+        """Set mask prob."""
         self.mask_prob = mask_prob
-    
+
     def lock_self_attention(self):
         # lock self-attention layers and only tune cross-attention layers
+        """Lock self attention."""
         for param in self.resblocks.parameters():
             param.requires_grad = False
 
     def forward(self, image_embs, text_embs):
+        """Compute the MultimodalTransformer forward pass for the supplied input tensors."""
         seq_len = text_embs.shape[1]
 
         attn_mask = self.attn_mask[:seq_len, :seq_len]
-        if self.mask_prob > 0. and self.training:
+        if self.mask_prob > 0.0 and self.training:
             batch_size = text_embs.shape[0]
             # full attn_mask is [B, H, L, L]
             attn_mask = attn_mask[None, :seq_len, :seq_len].repeat(batch_size, self.heads, 1, 1)
             # uniformly sample masking ratio from [0, mask_prob]
-            p = random.random() * self.mask_prob 
+            p = random.random() * self.mask_prob
             # task_embs: [N, L, D]
-            rand = torch.randn(text_embs.shape[:2], device = text_embs.device) # [N, L] token pos.
-            rand[:, 0] = -torch.finfo(rand.dtype).max # first token should not be masked out
+            rand = torch.randn(text_embs.shape[:2], device=text_embs.device)  # [N, L] token pos.
+            rand[:, 0] = -torch.finfo(rand.dtype).max  # first token should not be masked out
             num_mask = min(int(seq_len * p), seq_len - 1)
             # indices: [N, num_mask] ---> [N, L, num_mask]
-            indices = rand.topk(num_mask, dim = -1).indices[:, None, :].repeat(1, seq_len, 1)
-            # mask = positions to be masked out: 
+            indices = rand.topk(num_mask, dim=-1).indices[:, None, :].repeat(1, seq_len, 1)
+            # mask = positions to be masked out:
             mask = torch.zeros_like(attn_mask[:, 0, :, :]).scatter(2, indices, 1).bool()
             # update attn_mask such that masked out positions receive very negative attention
             attn_mask = attn_mask.masked_fill(mask[:, None, :, :], float("-inf"))
@@ -573,4 +636,5 @@ class MultimodalTransformer(Transformer):
 
     @torch.jit.ignore
     def set_grad_checkpointing(self, enable=True):
+        """Set grad checkpointing."""
         self.grad_checkpointing = enable

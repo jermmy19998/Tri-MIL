@@ -12,7 +12,7 @@ try:
 
     _HAS_OME_ZARR = True
     _EXCEPT_MESSAGE = None
-except ImportError as e: # ModuleNotFoundError is likely
+except ImportError as e:  # ModuleNotFoundError is likely
     _HAS_OME_ZARR = False
     _EXCEPT_MESSAGE = e
 
@@ -72,7 +72,6 @@ class OMEZarrWSI(WSI):
         super()._lazy_initialize()
 
         if not self._initialized:
-
             if not _HAS_OME_ZARR:
                 raise ImportError(
                     "ngff-zarr, zarr, dask, and cf_units are required for omezarr support. "
@@ -81,9 +80,7 @@ class OMEZarrWSI(WSI):
                 )
 
             try:
-                self.img = from_ngff_zarr(
-                    self.slide_path
-                )  # Multiscales dataclass from ngff-zarr
+                self.img = from_ngff_zarr(self.slide_path)  # Multiscales dataclass from ngff-zarr
 
                 idx_tuple, dimname_tuple = self._fetch_dimension_metadata()
                 self._idx_x, self._idx_y, self._idx_c = idx_tuple
@@ -117,9 +114,7 @@ class OMEZarrWSI(WSI):
                 self._initialized = True
 
             except Exception as e:
-                raise RuntimeError(
-                    f"Failed to initialize WSI with ngff-zarr: {e}"
-                ) from e
+                raise RuntimeError(f"Failed to initialize WSI with ngff-zarr: {e}") from e
 
     def _fetch_mpp(self):
         """
@@ -147,7 +142,6 @@ class OMEZarrWSI(WSI):
                 "- If using the `run_batch_of_slides.py` script, pass the MPP via the "
                 "`--custom_list_of_wsis` argument in a CSV file. Refer to TRIDENT/README/Q&A."
             )
-
 
     def _fetch_downsamples(self):
         """
@@ -189,7 +183,7 @@ class OMEZarrWSI(WSI):
         """
         Parse dimension metadata to identify spatial and channel axes.
 
-        Extracts and maps the indices and original string names for the x-axis, 
+        Extracts and maps the indices and original string names for the x-axis,
         y-axis, and channel dimensions from the image metadata.
 
         Returns:
@@ -205,12 +199,14 @@ class OMEZarrWSI(WSI):
         """
 
         dimnames = self.img.metadata.dimension_names
-        possible_dimnames_lowercase = {"x", "y", "c", "width", "height", 'channel'}
+        possible_dimnames_lowercase = {"x", "y", "c", "width", "height", "channel"}
 
         strlower = lambda x: x.lower()
         assert (len(dimnames) == 3) and (
             set(map(strlower, dimnames)).issubset(possible_dimnames_lowercase)
-        ), f"Err, read_region expects 3 dimensional image data with {possible_dimnames_lowercase} dim names, found {dimnames}"
+        ), (
+            f"Err, read_region expects 3 dimensional image data with {possible_dimnames_lowercase} dim names, found {dimnames}"
+        )
 
         try:
             _xname = next(d for d in dimnames if d.lower() in {"x", "width"})
@@ -222,9 +218,7 @@ class OMEZarrWSI(WSI):
                 f"{possible_dimnames_lowercase}, found {dimnames}."
             )
 
-        _dimname_to_index = {
-            name: i for i, name in enumerate(self.img.metadata.dimension_names)
-        }
+        _dimname_to_index = {name: i for i, name in enumerate(self.img.metadata.dimension_names)}
         _idx_x, _idx_y, _idx_c = (
             _dimname_to_index[_xname],
             _dimname_to_index[_yname],
@@ -268,6 +262,7 @@ class OMEZarrWSI(WSI):
         >>> print(region.shape)
         (512, 512, 3)
         """
+        self._ensure_open()  # reopen the handle if this WSI is cold (e.g. unpickled in a worker)
         # 'location' is relative to the level as calls are made to the data array
         downsample_factor = self.level_downsamples[level]
         location_ = (
@@ -298,9 +293,7 @@ class OMEZarrWSI(WSI):
         elif read_as == "numpy":
             return region
         else:
-            raise ValueError(
-                f"Invalid `read_as` value: {read_as}. Must be 'pil', 'numpy'."
-            )
+            raise ValueError(f"Invalid `read_as` value: {read_as}. Must be 'pil', 'numpy'.")
 
     def get_dimensions(self) -> Tuple[int, int]:
         """
@@ -325,20 +318,14 @@ class OMEZarrWSI(WSI):
         width, height = size
         # takes the average ratio between the thumbsize and the object's (level dimension) size then applies abs(x - 1) so min finds
         # the size ratio closest to 1
-        get_dim_to_size_adjusted_ratio = lambda x: abs(
-            (((x[0] / width) + (x[1] / height)) / 2) - 1
-        )
+        get_dim_to_size_adjusted_ratio = lambda x: abs((((x[0] / width) + (x[1] / height)) / 2) - 1)
         # get the min index rather than value
         closest_level = min(
             range(self.level_count),
-            key=lambda i: list(
-                map(get_dim_to_size_adjusted_ratio, self.level_dimensions)
-            )[i],
+            key=lambda i: list(map(get_dim_to_size_adjusted_ratio, self.level_dimensions))[i],
         )
 
         thumbimg_data = (
-            self.img.images[closest_level]
-            .data.compute()
-            .transpose(self._transpose_order)
+            self.img.images[closest_level].data.compute().transpose(self._transpose_order)
         )
         return Image.fromarray(thumbimg_data).convert("RGB").resize(size)

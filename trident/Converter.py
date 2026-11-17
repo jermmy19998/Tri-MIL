@@ -10,19 +10,57 @@ Image.MAX_IMAGE_PIXELS = None
 
 # Bioformats
 BIOFORMAT_EXTENSIONS = {
-    '.tif', '.tiff', '.ndpi', '.svs', '.lif', '.ims', '.vsi', '.bif', '.btf',
-    '.mrxs', '.scn', '.ome.tiff', '.ome.tif', '.h5', '.hdf', '.hdf5', '.he5',
-    '.dicom', '.dcm', '.ome.xml', '.zvi', '.pcoraw', '.jp2', '.qptiff', '.nrrd', '.ome.btf', '.fg7'
+    ".tif",
+    ".tiff",
+    ".ndpi",
+    ".svs",
+    ".lif",
+    ".ims",
+    ".vsi",
+    ".bif",
+    ".btf",
+    ".mrxs",
+    ".scn",
+    ".ome.tiff",
+    ".ome.tif",
+    ".h5",
+    ".hdf",
+    ".hdf5",
+    ".he5",
+    ".dicom",
+    ".dcm",
+    ".ome.xml",
+    ".zvi",
+    ".pcoraw",
+    ".jp2",
+    ".qptiff",
+    ".nrrd",
+    ".ome.btf",
+    ".fg7",
 }
 
 # PIL
-PIL_EXTENSIONS = {'.png', '.jpg', '.jpeg'}
+PIL_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 
 # OpenSlide
-OPENSLIDE_EXTENSIONS = {'.svs', '.tif', '.dcm', '.vms', '.vmu', '.ndpi', '.scn', '.mrxs', '.tiff', '.svslide', '.bif', '.czi'}
+OPENSLIDE_EXTENSIONS = {
+    ".svs",
+    ".tif",
+    ".dcm",
+    ".vms",
+    ".vmu",
+    ".ndpi",
+    ".scn",
+    ".mrxs",
+    ".tiff",
+    ".svslide",
+    ".bif",
+    ".czi",
+}
 
-# Combined with CZI 
-SUPPORTED_EXTENSIONS = BIOFORMAT_EXTENSIONS | PIL_EXTENSIONS | {'.czi'}
+# Combined with CZI
+SUPPORTED_EXTENSIONS = BIOFORMAT_EXTENSIONS | PIL_EXTENSIONS | {".czi"}
+
 
 def _process_file_worker(args) -> None:
     """Top-level worker for multiprocessing compatibility."""
@@ -31,15 +69,15 @@ def _process_file_worker(args) -> None:
     converter.process_file(input_file=input_file, mpp=mpp, zoom=zoom)
 
 
-
 class AnyToTiffConverter:
     """
     A class to convert images to TIFF format with options for resizing and pyramidal tiling.
-    
+
     Attributes:
         job_dir (str): Directory to save converted images.
         bigtiff (bool): Flag to enable the creation of BigTIFF files.
     """
+
     def __init__(self, job_dir: str, bigtiff: bool = False):
         """
         Initializes the Converter with a job directory and BigTIFF support.
@@ -83,7 +121,9 @@ class AnyToTiffConverter:
             save_path = os.path.join(self.job_dir, f"{img_name}.tiff")
 
             # Fast path: stream directly from source to pyramidal TIFF when pyvips supports it.
-            if self._try_pyvips_convert(input_file=input_file, save_path=save_path, zoom=zoom, mpp=output_mpp):
+            if self._try_pyvips_convert(
+                input_file=input_file, save_path=save_path, zoom=zoom, mpp=output_mpp
+            ):
                 return
 
             # Fallback path: load image via existing readers, then save with pyvips.
@@ -103,6 +143,7 @@ class AnyToTiffConverter:
         return self._detect_embedded_mpp_aicsimageio(file_path)
 
     def _detect_embedded_mpp_pyvips(self, file_path: str):
+        """Detect embedded mpp pyvips."""
         try:
             import pyvips
         except Exception:
@@ -121,15 +162,16 @@ class AnyToTiffConverter:
             return None
 
     def _detect_embedded_mpp_aicsimageio(self, file_path: str):
+        """Detect embedded mpp aicsimageio."""
         if not file_path.lower().endswith(tuple(BIOFORMAT_EXTENSIONS)):
             return None
         try:
-            from aicsimageio import AICSImage
+            from bioio import BioImage
         except Exception:
             return None
 
         try:
-            img = AICSImage(file_path)
+            img = BioImage(file_path)
             px_sizes = img.physical_pixel_sizes
             if px_sizes and px_sizes.X is not None:
                 return float(px_sizes.X)
@@ -175,20 +217,24 @@ class AnyToTiffConverter:
         Returns:
             np.ndarray: Array representing the resized image.
         """
-        if file_path.endswith('.czi'):
+        if file_path.endswith(".czi"):
             try:
                 import pylibCZIrw.czi as pyczi
             except ImportError:
-                raise ImportError("pylibCZIrw is required for CZI files. Install it with pip install pylibCZIrw.")
+                raise ImportError(
+                    "pylibCZIrw is required for CZI files. Install it with pip install pylibCZIrw."
+                )
             with pyczi.open_czi(file_path) as czidoc:
                 return czidoc.read(zoom=zoom)
         if file_path.lower().endswith(tuple(BIOFORMAT_EXTENSIONS)):
             try:
-                from aicsimageio import AICSImage
+                from bioio import BioImage
             except ImportError:
-                raise ImportError("Install aicsimageio with `pip install aicsimageio` to read this format.")
+                raise ImportError(
+                    "Install bioio with `pip install bioio bioio-imageio` to read this format."
+                )
 
-            img_obj = AICSImage(file_path)
+            img_obj = BioImage(file_path)
             # Extract first timepoint and first z-plane with channel-aware handling.
             czyx = img_obj.get_image_data("CZYX", T=0)
             if czyx.ndim != 4:
@@ -228,7 +274,7 @@ class AnyToTiffConverter:
             float: MPP value for the file.
         """
         filename = os.path.basename(input_file)
-        mpp_row = mpp_data.loc[mpp_data['wsi'] == filename, 'mpp']
+        mpp_row = mpp_data.loc[mpp_data["wsi"] == filename, "mpp"]
         if mpp_row.empty:
             raise ValueError(
                 f"No MPP found for {filename} in CSV. "
@@ -252,7 +298,9 @@ class AnyToTiffConverter:
         try:
             import pyvips
         except ImportError:
-            raise ImportError("pyvips is required for saving pyramidal TIFFs. Install it with pip install pyvips.")
+            raise ImportError(
+                "pyvips is required for saving pyramidal TIFFs. Install it with pip install pyvips."
+            )
         pyvips_img = pyvips.Image.new_from_array(img)
         self._save_pyvips_tiff(pyvips_img, save_path, mpp, pyvips)
 
@@ -265,13 +313,15 @@ class AnyToTiffConverter:
             tile=True,
             tile_width=256,
             tile_height=256,
-            compression='jpeg',
+            compression="jpeg",
             resunit=pyvips_module.enums.ForeignTiffResunit.CM,
-            xres=1. / (mpp * 1e-4),
-            yres=1. / (mpp * 1e-4)
+            xres=1.0 / (mpp * 1e-4),
+            yres=1.0 / (mpp * 1e-4),
         )
 
-    def process_all(self, input_dir: str, mpp_csv: str, downscale_by: int = 1, num_workers: int = 1) -> None:
+    def process_all(
+        self, input_dir: str, mpp_csv: str, downscale_by: int = 1, num_workers: int = 1
+    ) -> None:
         """
         Process all eligible image files in a directory to convert them to pyramidal TIFF.
 
@@ -291,10 +341,7 @@ class AnyToTiffConverter:
         if num_workers < 0:
             raise ValueError(f"num_workers must be >= 0, got {num_workers}.")
         if not os.path.isfile(mpp_csv):
-            raise ValueError(
-                f"MPP CSV not found: {mpp_csv}. "
-                "Provide a CSV with columns `wsi,mpp`."
-            )
+            raise ValueError(f"MPP CSV not found: {mpp_csv}. Provide a CSV with columns `wsi,mpp`.")
 
         mpp_df = pd.read_csv(mpp_csv)
         required_cols = {"wsi", "mpp"}
@@ -327,7 +374,9 @@ class AnyToTiffConverter:
         if skipped_missing:
             print(f"[Converter] Skipping {len(skipped_missing)} files not found in input_dir.")
         if skipped_unsupported:
-            print(f"[Converter] Skipping {len(skipped_unsupported)} files with unsupported extension.")
+            print(
+                f"[Converter] Skipping {len(skipped_unsupported)} files with unsupported extension."
+            )
         if not tasks:
             raise ValueError("No valid conversion tasks found from CSV entries.")
 
@@ -339,19 +388,22 @@ class AnyToTiffConverter:
                 self.process_file(img_path, mpp, zoom=zoom)
         else:
             with mp.Pool(processes=num_workers) as pool:
-                for _ in tqdm(pool.imap_unordered(_process_file_worker, tasks), total=len(tasks), desc="Processing images"):
+                for _ in tqdm(
+                    pool.imap_unordered(_process_file_worker, tasks),
+                    total=len(tasks),
+                    desc="Processing images",
+                ):
                     pass
 
         # No JVM cleanup required after removing valis_hest from converter path.
 
 
 if __name__ == "__main__":
-
     # Example usage. Still experimental. Coverage could be improved.
-    converter = AnyToTiffConverter(job_dir='./pyramidal_tiff', bigtiff=False)
+    converter = AnyToTiffConverter(job_dir="./pyramidal_tiff", bigtiff=False)
 
     # Convert all images in the dir "../pngs" with mpp specified in to_process.csv. TIFF are saved at the original pixel res.
-    converter.process_all(input_dir='../wsis/', mpp_csv='../pngs/to_process.csv', downscale_by=1)
+    converter.process_all(input_dir="../wsis/", mpp_csv="../pngs/to_process.csv", downscale_by=1)
 
     # Example of to_process.csv specifying the mpp of all WSIs in the dir "../wsis"
     # wsi,mpp

@@ -1,42 +1,34 @@
-from importlib.metadata import version, PackageNotFoundError
+"""TRIDENT preprocessing exports, loaded lazily to keep optional readers optional."""
+
+from importlib import import_module
+from importlib.metadata import PackageNotFoundError, version
 
 try:
-    __version__ = version("trident")
+    __version__ = version("tri-mil")
 except PackageNotFoundError:
-    __version__ = "unknown"
+    __version__ = "0.4.0"
 
-from trident.wsi_objects.OpenSlideWSI import OpenSlideWSI
-from trident.wsi_objects.CuCIMWSI import CuCIMWSI
-from trident.wsi_objects.ImageWSI import ImageWSI
-from trident.wsi_objects.SDPCWSI import SDPCWSI
-from trident.wsi_objects.OMEZarrWSI import OMEZarrWSI
-from trident.wsi_objects.CZIWSI import CZIWSI
-from trident.wsi_objects.WSIFactory import load_wsi, WSIReaderType
-from trident.wsi_objects.WSIPatcher import OpenSlideWSIPatcher, WSIPatcher
-from trident.wsi_objects.WSIPatcherDataset import WSIPatcherDataset
+_EXPORTS = {
+    "Processor": "trident.Processor",
+    "AnyToTiffConverter": "trident.Converter",
+    "visualize_heatmap": "trident.Visualization",
+    "deprecated": "trident.Maintenance",
+    "load_wsi": "trident.wsi_objects.WSIFactory",
+    "WSIReaderType": "trident.wsi_objects.WSIFactory",
+    "WSIPatcher": "trident.wsi_objects.WSIPatcher",
+    "OpenSlideWSIPatcher": "trident.wsi_objects.WSIPatcher",
+    "WSIPatcherDataset": "trident.wsi_objects.WSIPatcherDataset",
+}
+for _reader in ["OpenSlideWSI", "CuCIMWSI", "ImageWSI", "SDPCWSI", "OMEZarrWSI", "CZIWSI"]:
+    _EXPORTS[_reader] = f"trident.wsi_objects.{_reader}"
 
-from trident.Visualization import visualize_heatmap
+__all__ = list(_EXPORTS)
 
-from trident.Processor import Processor
 
-from trident.Converter import AnyToTiffConverter
-
-from trident.Maintenance import deprecated
-
-__all__ = [
-    "Processor",
-    "load_wsi",
-    "OpenSlideWSI", 
-    "ImageWSI",
-    "CuCIMWSI",
-    "SDPCWSI",
-    "OMEZarrWSI",
-    "CZIWSI",
-    "WSIPatcher",
-    "OpenSlideWSIPatcher",
-    "WSIPatcherDataset",
-    "visualize_heatmap",
-    "AnyToTiffConverter",
-    "deprecated",
-    "WSIReaderType",
-]
+def __getattr__(name):
+    """Import the requested preprocessing class only when it is first accessed."""
+    if name not in _EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(_EXPORTS[name]), name)
+    globals()[name] = value
+    return value

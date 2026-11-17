@@ -10,6 +10,7 @@ warnings.filterwarnings("ignore")
 
 
 def initialize_weights(module):
+    """Initialize weights."""
     for m in module.modules():
         if isinstance(m, nn.Linear):
             nn.init.xavier_normal_(m.weight)
@@ -21,6 +22,7 @@ def initialize_weights(module):
 
 
 def compute_axial_cis(dim, t_x, t_y, theta=1000.0):
+    """Compute axial cis."""
     device = t_x.device
     freqs_x = 1.0 / (theta ** (torch.arange(0, dim, 4, device=device).float()[: dim // 4] / dim))
     freqs_y = 1.0 / (theta ** (torch.arange(0, dim, 4, device=device).float()[: dim // 4] / dim))
@@ -32,8 +34,11 @@ def compute_axial_cis(dim, t_x, t_y, theta=1000.0):
 
 
 def rotary_90(coords):
+    """Rotary 90."""
     values = [0, torch.pi / 2, torch.pi, 3 * torch.pi / 2]
-    theta = torch.tensor(values[torch.randint(0, len(values), (1,)).item()], dtype=coords.dtype, device=coords.device)
+    theta = torch.tensor(
+        values[torch.randint(0, len(values), (1,)).item()], dtype=coords.dtype, device=coords.device
+    )
     center = torch.mean(coords / 100, dim=2, keepdim=True) * 100
     rotation_matrix = torch.tensor(
         [[torch.cos(theta), -torch.sin(theta)], [torch.sin(theta), torch.cos(theta)]],
@@ -44,23 +49,28 @@ def rotary_90(coords):
 
 
 def project_coords(coords):
+    """Project coords."""
     coords = coords - torch.min(coords, dim=-2, keepdim=True).values
     coords = coords.clamp(min=0).long()
     max_index = int(torch.max(coords).item()) + 1
     if max_index <= 1:
         return coords.float()
-    projected = torch.randint(0, 10240, (*coords.shape[:-2], max_index, coords.shape[-1]), device=coords.device).float()
+    projected = torch.randint(
+        0, 10240, (*coords.shape[:-2], max_index, coords.shape[-1]), device=coords.device
+    ).float()
     projected = torch.sort(projected, dim=-2).values
     return torch.gather(projected, dim=-2, index=coords)
 
 
 def random_project(coords, p=0.8):
+    """Random project."""
     if torch.rand(1, device=coords.device) < p:
         return project_coords(rotary_90(coords))
     return coords
 
 
 def apply_rotary_emb(xq, xk, coords, theta=1000.0, use_random_project=True):
+    """Apply rotary emb."""
     if use_random_project:
         coords = random_project(coords)
     t_x = coords[..., 0].reshape(*coords[..., 0].shape, 1)
@@ -75,6 +85,7 @@ def apply_rotary_emb(xq, xk, coords, theta=1000.0, use_random_project=True):
 
 
 def make_grid_coords(num_tokens, device, dtype):
+    """Make grid coords."""
     side = int(math.ceil(math.sqrt(num_tokens)))
     y = torch.arange(side, device=device, dtype=dtype).repeat_interleave(side)
     x = torch.arange(side, device=device, dtype=dtype).repeat(side)
@@ -82,6 +93,7 @@ def make_grid_coords(num_tokens, device, dtype):
 
 
 def minimum_bounding_rectangle(coords_np):
+    """Minimum bounding rectangle."""
     try:
         from scipy.spatial import ConvexHull
 
@@ -97,7 +109,9 @@ def minimum_bounding_rectangle(coords_np):
             edge_dir = p2 - p1
             edge_dir = edge_dir / (np.linalg.norm(edge_dir) + 1e-6)
             angle = np.arctan2(edge_dir[1], edge_dir[0])
-            rotation_matrix = np.array([[np.cos(angle), np.sin(angle)], [-np.sin(angle), np.cos(angle)]])
+            rotation_matrix = np.array(
+                [[np.cos(angle), np.sin(angle)], [-np.sin(angle), np.cos(angle)]]
+            )
             rotated = np.dot(coords_np - p1, rotation_matrix)
             min_x, min_y = np.min(rotated, axis=0)
             max_x, max_y = np.max(rotated, axis=0)
@@ -110,10 +124,18 @@ def minimum_bounding_rectangle(coords_np):
     except Exception:
         min_xy = np.min(coords_np, axis=0)
         max_xy = np.max(coords_np, axis=0)
-        return np.array([[min_xy[0], min_xy[1]], [max_xy[0], min_xy[1]], [max_xy[0], max_xy[1]], [min_xy[0], max_xy[1]]])
+        return np.array(
+            [
+                [min_xy[0], min_xy[1]],
+                [max_xy[0], min_xy[1]],
+                [max_xy[0], max_xy[1]],
+                [min_xy[0], max_xy[1]],
+            ]
+        )
 
 
 def distance_to_line(coords, line_start, line_end):
+    """Distance to line."""
     line_vec = line_end - line_start
     point_vecs = coords - line_start
     cross = np.cross(line_vec, point_vecs)
@@ -121,6 +143,7 @@ def distance_to_line(coords, line_start, line_end):
 
 
 def find_region_ag(coords, aggregate_num):
+    """Find region ag."""
     coords_np = coords.detach().cpu().numpy()
     mbr = minimum_bounding_rectangle(coords_np)
     length = np.linalg.norm(mbr[1] - mbr[0])
@@ -140,6 +163,7 @@ def find_region_ag(coords, aggregate_num):
 
 
 def fuse_labels(coords, ratio=2):
+    """Fuse labels."""
     min_xy = torch.min(coords, dim=0).values
     max_xy = torch.max(coords, dim=0).values
     width = (max_xy[0] - min_xy[0]).clamp(min=1)
@@ -152,10 +176,13 @@ def fuse_labels(coords, ratio=2):
 
 
 def create_tokens(coords, k_neighbors=8, max_dist=6 * np.sqrt(2)):
+    """Create tokens."""
     n = coords.shape[0]
     k_neighbors = min(k_neighbors, max(0, n - 1))
     if k_neighbors == 0:
-        return torch.zeros(n, 1, device=coords.device, dtype=torch.long), torch.zeros(n, 1, device=coords.device)
+        return torch.zeros(n, 1, device=coords.device, dtype=torch.long), torch.zeros(
+            n, 1, device=coords.device
+        )
     distance = torch.cdist(coords.float(), coords.float(), p=2)
     vals, indices = torch.topk(distance, k=k_neighbors + 1, largest=False, dim=-1)
     self_indices = torch.arange(n, device=coords.device).unsqueeze(1).repeat(1, k_neighbors + 1)
@@ -166,7 +193,10 @@ def create_tokens(coords, k_neighbors=8, max_dist=6 * np.sqrt(2)):
 
 
 class FlexDocumentAttention(nn.Module):
-    def __init__(self, dim=512, num_heads=8, qkv_bias=False, qk_norm=False, attn_drop=0.0, proj_drop=0.0):
+    def __init__(
+        self, dim=512, num_heads=8, qkv_bias=False, qk_norm=False, attn_drop=0.0, proj_drop=0.0
+    ):
+        """Initialize the FlexDocumentAttention instance and configure its dependencies."""
         super().__init__()
         if dim % num_heads != 0:
             raise ValueError(f"dim={dim} must be divisible by num_heads={num_heads}")
@@ -183,12 +213,18 @@ class FlexDocumentAttention(nn.Module):
         self.proj_drop = nn.Dropout(proj_drop)
 
     def forward(self, x, coords, region_indices):
+        """Compute the FlexDocumentAttention forward pass for the supplied input tensors."""
         b, n, c = x.shape
         _, inverse = torch.unique(region_indices, sorted=True, return_inverse=True)
         bin_count = torch.bincount(inverse)
         bin_count = bin_count[bin_count > 0]
 
-        q = self.query.unsqueeze(0).expand(b, n, -1).reshape(b, n, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+        q = (
+            self.query.unsqueeze(0)
+            .expand(b, n, -1)
+            .reshape(b, n, self.num_heads, self.head_dim)
+            .permute(0, 2, 1, 3)
+        )
         kv = self.kv(x).reshape(b, -1, 2, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
         k, v = kv[0], kv[1]
         q, k = self.q_norm(q), self.k_norm(k)
@@ -204,14 +240,26 @@ class FlexDocumentAttention(nn.Module):
             token = F.scaled_dot_product_attention(q_i, k_i, v_i, scale=self.scale)
             token = token.permute(0, 2, 1, 3).reshape(b, -1, c)
             token = self.proj_drop(self.proj(token)).mean(dim=1, keepdim=True)
-            coord = F.scaled_dot_product_attention(q_i, k_i, coords_i, scale=self.scale).mean(dim=2, keepdim=True)
+            coord = F.scaled_dot_product_attention(q_i, k_i, coords_i, scale=self.scale).mean(
+                dim=2, keepdim=True
+            )
             region_tokens.append(token)
             region_coords.append(coord)
         return torch.cat(region_tokens, dim=1), torch.cat(region_coords, dim=2)
 
 
 class PileAttention(nn.Module):
-    def __init__(self, dim=512, num_heads=8, qkv_bias=False, qk_norm=False, attn_drop=0.0, proj_drop=0.0, k_neighbors=8):
+    def __init__(
+        self,
+        dim=512,
+        num_heads=8,
+        qkv_bias=False,
+        qk_norm=False,
+        attn_drop=0.0,
+        proj_drop=0.0,
+        k_neighbors=8,
+    ):
+        """Initialize the PileAttention instance and configure its dependencies."""
         super().__init__()
         if dim % num_heads != 0:
             raise ValueError(f"dim={dim} must be divisible by num_heads={num_heads}")
@@ -227,6 +275,7 @@ class PileAttention(nn.Module):
         self.k_neighbors = k_neighbors
 
     def forward(self, x, seman_tokens, coords, seman_coords, attn_mask):
+        """Compute the PileAttention forward pass for the supplied input tensors."""
         b, n_1, c = x.shape
         k_neighbors = min(n_1 - 1, self.k_neighbors)
         x = torch.cat([x, seman_tokens], dim=1)
@@ -256,15 +305,29 @@ class PileAttention(nn.Module):
             b, self.num_heads, -1, -1, c // self.num_heads
         )
         pile_q = q[:, :, :n_1, :].unsqueeze(3)
-        pile_k = torch.gather(k[:, :, :n_1, :].unsqueeze(3).expand(-1, -1, -1, k_neighbors + 1, -1), 2, mask_index)
-        pile_v = torch.gather(v[:, :, :n_1, :].unsqueeze(3).expand(-1, -1, -1, k_neighbors + 1, -1), 2, mask_index)
-        pile_k = torch.cat([pile_k, k[:, :, n_1:, :].unsqueeze(2).expand(-1, -1, n_1, -1, -1)], dim=3)
-        pile_v = torch.cat([pile_v, v[:, :, n_1:, :].unsqueeze(2).expand(-1, -1, n_1, -1, -1)], dim=3)
+        pile_k = torch.gather(
+            k[:, :, :n_1, :].unsqueeze(3).expand(-1, -1, -1, k_neighbors + 1, -1), 2, mask_index
+        )
+        pile_v = torch.gather(
+            v[:, :, :n_1, :].unsqueeze(3).expand(-1, -1, -1, k_neighbors + 1, -1), 2, mask_index
+        )
+        pile_k = torch.cat(
+            [pile_k, k[:, :, n_1:, :].unsqueeze(2).expand(-1, -1, n_1, -1, -1)], dim=3
+        )
+        pile_v = torch.cat(
+            [pile_v, v[:, :, n_1:, :].unsqueeze(2).expand(-1, -1, n_1, -1, -1)], dim=3
+        )
 
         local_mask = neighbor_flag.unsqueeze(0).unsqueeze(1).expand(b, self.num_heads, -1, -1)
-        global_mask = torch.zeros(b, self.num_heads, pile_k.shape[2], pile_k.shape[3] - k_neighbors - 1, device=x.device)
+        global_mask = torch.zeros(
+            b, self.num_heads, pile_k.shape[2], pile_k.shape[3] - k_neighbors - 1, device=x.device
+        )
         con_mask = torch.cat([local_mask, global_mask], dim=-1)
-        full_mask = torch.zeros(pile_k.shape[:-1], device=x.device).masked_fill(con_mask == -1, float("-inf")).unsqueeze(-2)
+        full_mask = (
+            torch.zeros(pile_k.shape[:-1], device=x.device)
+            .masked_fill(con_mask == -1, float("-inf"))
+            .unsqueeze(-2)
+        )
         pile_out = F.scaled_dot_product_attention(
             pile_q,
             pile_k,
@@ -291,8 +354,11 @@ class StableBlock(nn.Module):
         attn_drop=0.0,
         k_neighbors=8,
     ):
+        """Initialize the StableBlock instance and configure its dependencies."""
         super().__init__()
-        self.parti_attention = PileAttention(dim, num_heads, qkv_bias, qk_norm, attn_drop, proj_drop, k_neighbors)
+        self.parti_attention = PileAttention(
+            dim, num_heads, qkv_bias, qk_norm, attn_drop, proj_drop, k_neighbors
+        )
         self.norm2 = nn.LayerNorm(dim)
         self.mlp = nn.Sequential(
             nn.Linear(dim, int(dim * mlp_ratio)),
@@ -303,6 +369,7 @@ class StableBlock(nn.Module):
         )
 
     def forward(self, x, seman_x, coords, seman_coords, mask):
+        """Compute the StableBlock forward pass for the supplied input tensors."""
         n = x.shape[1]
         residual = torch.cat([x, seman_x], dim=1)
         x = residual + self.parti_attention(x, seman_x, coords, seman_coords, mask)
@@ -312,6 +379,7 @@ class StableBlock(nn.Module):
 
 class StableSequential(nn.Sequential):
     def forward(self, x, seman_x, coords, seman_coords, mask):
+        """Compute the StableSequential forward pass for the supplied input tensors."""
         for module in self:
             x, seman_x, coords, seman_coords, mask = module(x, seman_x, coords, seman_coords, mask)
         return torch.cat([x, seman_x], dim=1)
@@ -353,6 +421,7 @@ class STABLE_MIL(nn.Module):
         learnable_mapping=False,
         act=None,
     ):
+        """Initialize the STABLE_MIL instance and configure its dependencies."""
         super().__init__()
         del act
         self.in_dim = in_dim
@@ -369,10 +438,21 @@ class STABLE_MIL(nn.Module):
         else:
             self.mapping = nn.Linear(in_dim, hidden_dim)
         self.act1 = nn.GELU()
-        self.ag_attn = FlexDocumentAttention(hidden_dim, num_heads, qkv_bias, qk_norm, dropout, dropout)
+        self.ag_attn = FlexDocumentAttention(
+            hidden_dim, num_heads, qkv_bias, qk_norm, dropout, dropout
+        )
         self.blocks = StableSequential(
             *[
-                StableBlock(hidden_dim, num_heads, mlp_ratio, qkv_bias, qk_norm, dropout, dropout, k_neighbors)
+                StableBlock(
+                    hidden_dim,
+                    num_heads,
+                    mlp_ratio,
+                    qkv_bias,
+                    qk_norm,
+                    dropout,
+                    dropout,
+                    k_neighbors,
+                )
                 for _ in range(depth)
             ]
         )
@@ -383,6 +463,7 @@ class STABLE_MIL(nn.Module):
         self.apply(initialize_weights)
 
     def _split_features_coords(self, x, coords=None):
+        """Split features coords."""
         if x.dim() == 2:
             x = x.unsqueeze(0)
         if coords is not None:
@@ -391,10 +472,13 @@ class STABLE_MIL(nn.Module):
             return x[..., : self.in_dim], coords.float()
         if x.shape[-1] == self.in_dim + 2:
             return x[..., : self.in_dim], x[..., self.in_dim : self.in_dim + 2].float()
-        coords = make_grid_coords(x.shape[1], x.device, x.dtype).unsqueeze(0).expand(x.shape[0], -1, -1)
+        coords = (
+            make_grid_coords(x.shape[1], x.device, x.dtype).unsqueeze(0).expand(x.shape[0], -1, -1)
+        )
         return x[..., : self.in_dim], coords
 
     def _fuse_token_single(self, x, coords):
+        """Fuse token single."""
         labels = fuse_labels(coords, self.ratio)
         unique_labels, inverse = torch.unique(labels, sorted=True, return_inverse=True)
         max_points = int(self.ratio**2)
@@ -421,6 +505,7 @@ class STABLE_MIL(nn.Module):
         return torch.stack(region_tokens), torch.stack(region_coords), inverse
 
     def _prepare_single(self, x, coords):
+        """Prepare single."""
         coords = coords / self.coord_scale
         region_tokens, region_coords, patch_to_region = self._fuse_token_single(x, coords)
         if region_coords.shape[0] < 2:
@@ -430,22 +515,37 @@ class STABLE_MIL(nn.Module):
             region_indices = find_region_ag(region_coords, self.aggregate_num)
             region_sorted_index = torch.argsort(region_indices)
         sorted_position = torch.empty_like(region_sorted_index)
-        sorted_position[region_sorted_index] = torch.arange(region_sorted_index.numel(), device=x.device)
+        sorted_position[region_sorted_index] = torch.arange(
+            region_sorted_index.numel(), device=x.device
+        )
         patch_to_sorted_region = sorted_position[patch_to_region]
         sorted_coords = region_coords[region_sorted_index]
         attention_mask = create_tokens(sorted_coords, self.k_neighbors, self.max_dist)
-        return region_tokens, region_coords, region_indices, region_sorted_index, attention_mask, patch_to_sorted_region
+        return (
+            region_tokens,
+            region_coords,
+            region_indices,
+            region_sorted_index,
+            attention_mask,
+            patch_to_sorted_region,
+        )
 
     def forward(self, x, coords=None, return_WSI_attn=False, return_WSI_feature=False):
+        """Compute the STABLE_MIL forward pass for the supplied input tensors."""
         forward_return = {}
         x, coords = self._split_features_coords(x, coords)
         slide_features = []
         patch_scores = []
 
         for batch_idx in range(x.shape[0]):
-            region_tokens, region_coords, region_indices, region_sorted_index, attention_mask, patch_to_region = self._prepare_single(
-                x[batch_idx].float(), coords[batch_idx]
-            )
+            (
+                region_tokens,
+                region_coords,
+                region_indices,
+                region_sorted_index,
+                attention_mask,
+                patch_to_region,
+            ) = self._prepare_single(x[batch_idx].float(), coords[batch_idx])
             h = region_tokens.unsqueeze(0)
             h = h[:, region_sorted_index]
             h_coords = region_coords.unsqueeze(0)[:, region_sorted_index]
@@ -467,4 +567,3 @@ class STABLE_MIL(nn.Module):
         if return_WSI_attn:
             forward_return["WSI_attn"] = patch_scores[0] if len(patch_scores) == 1 else patch_scores
         return forward_return
-

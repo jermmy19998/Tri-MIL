@@ -6,48 +6,50 @@ import h5py
 import torch
 from torch.utils.data import Dataset
 
+
 class WSI_Dataset(Dataset):
     def __init__(self, dataset_info_csv_path, group, mode=None):
-        assert group in ['train', 'val', 'test'], \
-            'group must be in [train,val,test]'
+        """Initialize the WSI_Dataset instance and configure its dependencies."""
+        assert group in ["train", "val", "test"], "group must be in [train,val,test]"
 
         self.mode = mode
         self.dataset_info_csv_path = dataset_info_csv_path
         self.dataset_df = pd.read_csv(self.dataset_info_csv_path)
 
-        self.slide_path_list = self.dataset_df[group + '_slide_path'].dropna().to_list()
+        self.slide_path_list = self.dataset_df[group + "_slide_path"].dropna().to_list()
 
         # 只有非 infer 才读取 label
         if self.mode != "infer":
-            self.labels_list = self.dataset_df[group + '_label'].dropna().to_list()
+            self.labels_list = self.dataset_df[group + "_label"].dropna().to_list()
             if len(self.slide_path_list) != len(self.labels_list):
                 raise ValueError(f"{group} slide_path and label length mismatch")
         else:
             self.labels_list = None
 
     def __len__(self):
+        """Return the number of entries exposed by this WSI_Dataset instance."""
         return len(self.slide_path_list)
 
     def __getitem__(self, idx):
-
+        """Return the WSI_Dataset entry at the requested index."""
         slide_path = self.slide_path_list[idx]
 
         # ==========================
         # Load feature
         # ==========================
-        if slide_path.endswith('.h5'):
-            with h5py.File(slide_path, 'r') as h5_file:
-                feat = h5_file['features'][:]
+        if slide_path.endswith(".h5"):
+            with h5py.File(slide_path, "r") as h5_file:
+                feat = h5_file["features"][:]
                 feat = torch.from_numpy(feat)
         else:
             feat = torch.load(slide_path)
 
             # Handle dictionary format
             if isinstance(feat, dict):
-                if 'feats' in feat:
-                    feat = feat['feats']
-                elif 'features' in feat:
-                    feat = feat['features']
+                if "feats" in feat:
+                    feat = feat["feats"]
+                elif "features" in feat:
+                    feat = feat["features"]
                 else:
                     raise ValueError(
                         f"Unknown dict format in {slide_path}, keys: {list(feat.keys())}"
@@ -71,12 +73,15 @@ class WSI_Dataset(Dataset):
         return feat, label, slide_path
 
     def is_None_Dataset(self):
-        return (self.__len__() == 0)    
-    
+        """Is  None  Dataset."""
+        return self.__len__() == 0
+
     def is_with_labels(self):
-        return (len(self.labels_list) != 0)
-    
+        """Is with labels."""
+        return len(self.labels_list) != 0
+
     def get_balanced_sampler(self, replacement=True):
+        """Get balanced sampler."""
         from collections import Counter
         from torch.utils.data import WeightedRandomSampler
 
@@ -84,44 +89,58 @@ class WSI_Dataset(Dataset):
         weights = [1.0 / label_counts[label] for label in self.labels_list]
         num_samples = len(self.labels_list)
 
-        sampler = WeightedRandomSampler(weights=weights, num_samples=num_samples, replacement=replacement)
+        sampler = WeightedRandomSampler(
+            weights=weights, num_samples=num_samples, replacement=replacement
+        )
         return sampler
 
-    
-class CDP_MIL_WSI_Dataset(WSI_Dataset):
-    def __init__(self,dataset_info_csv_path,BeyesGuassian_pt_dir,group,mode=None):
-        super(CDP_MIL_WSI_Dataset,self).__init__(dataset_info_csv_path,group,mode=mode)
-        self.slide_path_list = [os.path.join(BeyesGuassian_pt_dir,os.path.basename(slide_path).replace('.pt', '_bayesian_gaussian.pt')) for slide_path in self.slide_path_list]
-        
 
-    
+class CDP_MIL_WSI_Dataset(WSI_Dataset):
+    def __init__(self, dataset_info_csv_path, BeyesGuassian_pt_dir, group, mode=None):
+        """Initialize the CDP_MIL_WSI_Dataset instance and configure its dependencies."""
+        super(CDP_MIL_WSI_Dataset, self).__init__(dataset_info_csv_path, group, mode=mode)
+        self.slide_path_list = [
+            os.path.join(
+                BeyesGuassian_pt_dir,
+                os.path.basename(slide_path).replace(".pt", "_bayesian_gaussian.pt"),
+            )
+            for slide_path in self.slide_path_list
+        ]
+
+
 class LONG_MIL_WSI_Dataset(WSI_Dataset):
-    def __init__(self,dataset_info_csv_path,h5_csv_path,group,mode=None):
-        super(LONG_MIL_WSI_Dataset,self).__init__(dataset_info_csv_path,group,mode=mode)
-        self.h5_path_list = pd.read_csv(h5_csv_path)['h5_path'].dropna().values
+    def __init__(self, dataset_info_csv_path, h5_csv_path, group, mode=None):
+        """Initialize the LONG_MIL_WSI_Dataset instance and configure its dependencies."""
+        super(LONG_MIL_WSI_Dataset, self).__init__(dataset_info_csv_path, group, mode=mode)
+        self.h5_path_list = pd.read_csv(h5_csv_path)["h5_path"].dropna().values
 
     def __getitem__(self, idx):
+        """Return the LONG_MIL_WSI_Dataset entry at the requested index."""
         slide_path = self.slide_path_list[idx]
-        slide_name = os.path.basename(slide_path).replace('.pt','')
+        slide_name = os.path.basename(slide_path).replace(".pt", "")
         h5_path = self._find_h5_path_by_slide_name(slide_name, self.h5_path_list)
         print(h5_path)
-        with h5py.File(h5_path, 'r') as h5_file:
-            coords = torch.from_numpy(np.array(h5_file['coords']))
-        feat = torch.load(slide_path) 
+        with h5py.File(h5_path, "r") as h5_file:
+            coords = torch.from_numpy(np.array(h5_file["coords"]))
+        feat = torch.load(slide_path)
         if len(feat.shape) == 3:
-            feat = feat.squeeze(0) # (N,D)
+            feat = feat.squeeze(0)  # (N,D)
         if len(coords.shape) == 3:
-            coords = coords.squeeze(0) # (N,2)
-        feat_with_coords = torch.cat([feat, coords], dim=-1) # (N,D+2) 
+            coords = coords.squeeze(0)  # (N,2)
+        feat_with_coords = torch.cat([feat, coords], dim=-1)  # (N,D+2)
         if self.mode == "infer":
             return feat_with_coords, slide_path
         label = int(self.labels_list[idx])
         label = torch.tensor(label)
-        return feat_with_coords,label 
-    
+        return feat_with_coords, label
+
     def _find_h5_path_by_slide_name(self, slide_name, h5_paths_list):
-        h5_dict = {os.path.basename(h5_path).replace('.h5', ''): h5_path for h5_path in h5_paths_list}
+        """Find h5 path by slide name."""
+        h5_dict = {
+            os.path.basename(h5_path).replace(".h5", ""): h5_path for h5_path in h5_paths_list
+        }
         return h5_dict.get(slide_name, None)
+
 
 class SC_MIL_WSI_Dataset(WSI_Dataset):
     """
@@ -129,21 +148,27 @@ class SC_MIL_WSI_Dataset(WSI_Dataset):
     If h5_csv_path is provided, uses coords from h5 files (like LONG_MIL)
     If h5_csv_path is None, generates dummy coords based on patch indices
     """
-    def __init__(self, dataset_info_csv_path, h5_csv_path=None, group='train', use_dummy_coords=True):
+
+    def __init__(
+        self, dataset_info_csv_path, h5_csv_path=None, group="train", use_dummy_coords=True
+    ):
+        """Initialize the SC_MIL_WSI_Dataset instance and configure its dependencies."""
         super(SC_MIL_WSI_Dataset, self).__init__(dataset_info_csv_path, group)
         self.use_dummy_coords = use_dummy_coords
-        
+
         if h5_csv_path is not None and os.path.exists(h5_csv_path):
             # Use h5 files if available
-            self.h5_path_list = pd.read_csv(h5_csv_path)['h5_path'].dropna().values
+            self.h5_path_list = pd.read_csv(h5_csv_path)["h5_path"].dropna().values
             self.use_dummy_coords = False
         else:
             # Use dummy coords
             self.h5_path_list = None
             self.use_dummy_coords = True
             if h5_csv_path is not None:
-                print(f"⚠️  Warning: h5_csv_path '{h5_csv_path}' not found. Using dummy coords for SC_MIL.")
-    
+                print(
+                    f"⚠️  Warning: h5_csv_path '{h5_csv_path}' not found. Using dummy coords for SC_MIL."
+                )
+
     def _generate_dummy_coords(self, num_patches):
         """
         Generate dummy coordinates based on patch indices
@@ -151,29 +176,30 @@ class SC_MIL_WSI_Dataset(WSI_Dataset):
         """
         # Estimate grid size (assume roughly square)
         grid_size = int(np.ceil(np.sqrt(num_patches)))
-        
+
         # Generate 2D grid coordinates
         coords = []
         for i in range(num_patches):
             row = i // grid_size
             col = i % grid_size
             coords.append([col, row])  # (x, y) format
-        
+
         return np.array(coords, dtype=np.float32)
-    
+
     def __getitem__(self, idx):
+        """Return the SC_MIL_WSI_Dataset entry at the requested index."""
         slide_path = self.slide_path_list[idx]
-        slide_name = os.path.basename(slide_path).replace('.pt', '')
+        slide_name = os.path.basename(slide_path).replace(".pt", "")
         label = int(self.labels_list[idx])
         label = torch.tensor(label)
-        
+
         # Load features
         feat = torch.load(slide_path)
         if len(feat.shape) == 3:
             feat = feat.squeeze(0)  # (N, D)
-        
+
         num_patches = feat.shape[0]
-        
+
         # Get coords
         if self.use_dummy_coords:
             # Generate dummy coords
@@ -187,18 +213,75 @@ class SC_MIL_WSI_Dataset(WSI_Dataset):
                 coords_np = self._generate_dummy_coords(num_patches)
                 coords = torch.from_numpy(coords_np)
             else:
-                h5_file = h5py.File(h5_path, 'r')
-                coords = torch.from_numpy(np.array(h5_file['coords']))
+                h5_file = h5py.File(h5_path, "r")
+                coords = torch.from_numpy(np.array(h5_file["coords"]))
                 h5_file.close()
                 if len(coords.shape) == 3:
                     coords = coords.squeeze(0)  # (N, 2)
-        
+
         # Concatenate features and coords
         feat_with_coords = torch.cat([feat, coords], dim=-1)  # (N, D+2)
         return feat_with_coords, label
-    
+
     def _find_h5_path_by_slide_name(self, slide_name, h5_paths_list):
+        """Find h5 path by slide name."""
         if h5_paths_list is None:
             return None
-        h5_dict = {os.path.basename(h5_path).replace('.h5', ''): h5_path for h5_path in h5_paths_list}
+        h5_dict = {
+            os.path.basename(h5_path).replace(".h5", ""): h5_path for h5_path in h5_paths_list
+        }
         return h5_dict.get(slide_name, None)
+
+
+class WSI_Coord_Dataset(WSI_Dataset):
+    """
+    WSI dataset variant for spatial MIL models.
+
+    If feature files contain coordinates, the returned tensor is
+    ``[num_patches, feature_dim + 2]`` with ``(x, y)`` appended to the last
+    dimension. Supported coordinate sources:
+    - ``.h5`` files with ``features`` and ``coords`` datasets
+    - ``.pt`` dicts with ``feats``/``features`` and ``coords`` keys
+
+    If coordinates are absent, it returns features only; spatial models then use
+    their pseudo-grid fallback for compatibility.
+    """
+
+    def __getitem__(self, idx):
+        """Return the WSI_Coord_Dataset entry at the requested index."""
+        slide_path = self.slide_path_list[idx]
+        label = int(self.labels_list[idx])
+        label = torch.tensor(label)
+        coords = None
+
+        if slide_path.endswith(".h5"):
+            with h5py.File(slide_path, "r") as h5_file:
+                feat = h5_file["features"][:]
+                feat = torch.from_numpy(feat)
+                if "coords" in h5_file:
+                    coords = torch.from_numpy(np.array(h5_file["coords"]))
+        else:
+            loaded = torch.load(slide_path)
+            if isinstance(loaded, dict):
+                if "feats" in loaded:
+                    feat = loaded["feats"]
+                elif "features" in loaded:
+                    feat = loaded["features"]
+                else:
+                    raise ValueError(
+                        f"Unknown dict format in {slide_path}, keys: {list(loaded.keys())}"
+                    )
+                if "coords" in loaded:
+                    coords = loaded["coords"]
+            else:
+                feat = loaded
+
+        if len(feat.shape) == 3:
+            feat = feat.squeeze(0)
+        if coords is not None:
+            if len(coords.shape) == 3:
+                coords = coords.squeeze(0)
+            coords = coords.to(feat.device).float()
+            if coords.shape[0] == feat.shape[0] and coords.shape[-1] >= 2:
+                feat = torch.cat([feat, coords[:, :2]], dim=-1)
+        return feat, label, slide_path

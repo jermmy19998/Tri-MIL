@@ -25,10 +25,12 @@ SUPPORTED_SOURCE_SUFFIXES = (
 
 
 def _normalize_stem(name: str) -> str:
+    """Normalize stem."""
     return Path(name).stem
 
 
 def _ensure_exists(path: str, path_name: str) -> Path:
+    """Ensure exists."""
     resolved = Path(path)
     if not resolved.exists():
         raise FileNotFoundError(f"{path_name} does not exist: {path}")
@@ -36,6 +38,7 @@ def _ensure_exists(path: str, path_name: str) -> Path:
 
 
 def _iter_files(directory: Path, recursive: bool, suffixes: tuple[str, ...]) -> list[Path]:
+    """Iter files."""
     iterator = directory.rglob("*") if recursive else directory.iterdir()
     files = []
     for path in iterator:
@@ -45,11 +48,13 @@ def _iter_files(directory: Path, recursive: bool, suffixes: tuple[str, ...]) -> 
 
 
 def _find_feature_files(feature_dir: str, recursive: bool = False) -> list[str]:
+    """Find feature files."""
     feature_root = _ensure_exists(feature_dir, "Feature directory")
     return [str(path) for path in _iter_files(feature_root, recursive, SUPPORTED_FEATURE_SUFFIXES)]
 
 
 def _build_feature_index(feature_dir: str, recursive: bool = False) -> dict[str, str]:
+    """Build feature index."""
     feature_files = _find_feature_files(feature_dir, recursive=recursive)
     feature_map = {}
     duplicate_stems = []
@@ -72,6 +77,7 @@ def _build_feature_index(feature_dir: str, recursive: bool = False) -> dict[str,
 
 
 def _read_reference_csv(reference_csv: str, slide_col: str, label_col: str) -> pd.DataFrame:
+    """Read reference csv."""
     reference_path = _ensure_exists(reference_csv, "Reference CSV")
     df = pd.read_csv(reference_path)
 
@@ -84,6 +90,7 @@ def _read_reference_csv(reference_csv: str, slide_col: str, label_col: str) -> p
 
 
 def _write_dataframe(out_df: pd.DataFrame, output_csv: str) -> None:
+    """Write dataframe."""
     output_path = Path(output_csv)
     if output_path.parent != Path("."):
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -102,6 +109,7 @@ def build_labeled_csv_from_reference_csv(
     label_col: str,
     feature_recursive: bool = False,
 ) -> None:
+    """Build labeled csv from reference csv."""
     feature_map = _build_feature_index(feature_dir, recursive=feature_recursive)
     ref_df = _read_reference_csv(reference_csv, slide_col, label_col)
 
@@ -125,7 +133,9 @@ def build_labeled_csv_from_reference_csv(
         )
 
     if not rows:
-        raise ValueError("No labeled rows were generated. Check feature_dir and reference_csv alignment.")
+        raise ValueError(
+            "No labeled rows were generated. Check feature_dir and reference_csv alignment."
+        )
 
     _write_dataframe(pd.DataFrame(rows), output_csv)
 
@@ -134,6 +144,7 @@ def build_labeled_csv_from_feature_label_dirs(
     feature_dir: str,
     output_csv: str,
 ) -> None:
+    """Build labeled csv from feature label dirs."""
     feature_root = _ensure_exists(feature_dir, "Feature directory")
     label_dirs = [path for path in sorted(feature_root.iterdir()) if path.is_dir()]
     if not label_dirs:
@@ -172,6 +183,7 @@ def build_labeled_csv_from_source_label_dirs(
     feature_recursive: bool = False,
     source_recursive: bool = True,
 ) -> None:
+    """Build labeled csv from source label dirs."""
     source_root = _ensure_exists(source_dir, "Source directory")
     feature_map = _build_feature_index(feature_dir, recursive=feature_recursive)
 
@@ -190,7 +202,9 @@ def build_labeled_csv_from_source_label_dirs(
 
     for label_dir in label_dirs:
         label_idx = label_to_index[label_dir.name]
-        source_files = _iter_files(label_dir, recursive=source_recursive, suffixes=SUPPORTED_SOURCE_SUFFIXES)
+        source_files = _iter_files(
+            label_dir, recursive=source_recursive, suffixes=SUPPORTED_SOURCE_SUFFIXES
+        )
 
         for source_path in source_files:
             slide_id = _normalize_stem(source_path.name)
@@ -220,6 +234,7 @@ def build_infer_csv_from_feature_dir(
     output_csv: str,
     recursive: bool = False,
 ) -> None:
+    """Build infer csv from feature dir."""
     feature_files = _find_feature_files(feature_dir, recursive=recursive)
     if not feature_files:
         raise ValueError(f"No feature files (.h5 or .pt) found in {feature_dir}")
@@ -228,6 +243,7 @@ def build_infer_csv_from_feature_dir(
 
 
 def main() -> None:
+    """Run the command-line workflow defined by this module."""
     parser = argparse.ArgumentParser(
         description=(
             "Prepare dataset CSVs for Tri-MIL from a flat feature directory + reference CSV, "

@@ -3,7 +3,7 @@ import cv2
 import matplotlib.pyplot as plt
 from PIL import Image
 from typing import Optional, Tuple, Union, Any
-import os 
+import os
 from shapely import Polygon, MultiPolygon
 
 
@@ -12,11 +12,11 @@ def create_overlay(
     coords: np.ndarray,
     patch_size_level0: int,
     scale: np.ndarray,
-    region_size: Tuple[int, int]
+    region_size: Tuple[int, int],
 ) -> np.ndarray:
     """
     Create the heatmap overlay based on scores and coordinates.
-    
+
     Parameters:
         scores (np.ndarray):
             Normalized scores.
@@ -34,25 +34,27 @@ def create_overlay(
     """
     patch_size = np.ceil(np.array([patch_size_level0, patch_size_level0]) * scale).astype(int)
     coords = np.ceil(coords * scale).astype(int)
-    
+
     overlay = np.zeros(tuple(np.flip(region_size)), dtype=float)
     counter = np.zeros_like(overlay, dtype=np.uint16)
-    
+
     for idx, coord in enumerate(coords):
-        overlay[coord[1]:coord[1] + patch_size[1], coord[0]:coord[0] + patch_size[0]] += scores[idx]
-        counter[coord[1]:coord[1] + patch_size[1], coord[0]:coord[0] + patch_size[0]] += 1
-    
+        overlay[coord[1] : coord[1] + patch_size[1], coord[0] : coord[0] + patch_size[0]] += scores[
+            idx
+        ]
+        counter[coord[1] : coord[1] + patch_size[1], coord[0] : coord[0] + patch_size[0]] += 1
+
     zero_mask = counter == 0
     overlay[~zero_mask] /= counter[~zero_mask]
     overlay[zero_mask] = np.nan  # Set areas with no data to NaN
-    
+
     return overlay
 
 
 def apply_colormap(overlay: np.ndarray, cmap_name: str) -> np.ndarray:
     """
     Apply a colormap to the heatmap overlay.
-    
+
     Parameters:
         overlay (np.ndarray):
             Heatmap overlay.
@@ -76,19 +78,17 @@ def visualize_heatmap(
     coords: np.ndarray,
     patch_size_level0: int,
     vis_level: Optional[int] = 2,
-    cmap: str = 'coolwarm',
+    cmap: str = "coolwarm",
     normalize: bool = True,
     num_top_patches_to_save: int = -1,
     output_dir: Optional[str] = "output",
     vis_mag: Optional[int] = None,
     overlay_only: bool = False,
-    blur: bool = False,
-    topk_dir_name: str = "topk_patches",
-    filename: str = 'heatmap.png'
+    filename: str = "heatmap.png",
 ) -> str:
     """
     Generate a heatmap visualization overlayed on a whole slide image (WSI).
-    
+
     Parameters:
         wsi (WSI):
             Whole slide image object.
@@ -113,12 +113,6 @@ def visualize_heatmap(
         overlay_only (bool):
             Whether to save the overlay only. If True, saves the overlay on top of a downscaled version of the WSI.
             Defaults to False.
-        blur (bool):
-            Whether to apply gaussian blur to the heatmap overlay for smoother visualization.
-            Defaults to False.
-        topk_dir_name (str):
-            Directory name used to save top-scoring patches under `output_dir`.
-            Defaults to "topk_patches".
         filename (str):
             File will be saved in `output_dir`/`filename`.
 
@@ -128,8 +122,9 @@ def visualize_heatmap(
 
     if normalize:
         from scipy.stats import rankdata
-        scores = rankdata(scores, 'average') / len(scores) * 100 / 100
-    
+
+        scores = rankdata(scores, "average") / len(scores) * 100 / 100
+
     if vis_mag is None:
         downsample = wsi.level_downsamples[vis_level]
     else:
@@ -137,32 +132,22 @@ def visualize_heatmap(
         downsample = src_mag / vis_mag
         if not overlay_only:
             vis_level, _ = wsi.get_best_level_and_custom_downsample(downsample)
-    
+
     scale = np.array([1 / downsample, 1 / downsample])
     region_size = tuple((np.array(wsi.level_dimensions[0]) * scale).astype(int))
     overlay = create_overlay(scores, coords, patch_size_level0, scale, region_size)
 
-    if blur:
-        nan_mask = np.isnan(overlay)
-        patch_size_scaled = np.ceil(np.array([patch_size_level0, patch_size_level0]) * scale).astype(int)
-        kernel = np.maximum(3, (patch_size_scaled * 2).astype(int))
-        kernel = kernel + (kernel + 1) % 2  # ensure odd kernel sizes
-        overlay_for_blur = np.nan_to_num(overlay, nan=0.0).astype(np.float32)
-        overlay = cv2.GaussianBlur(overlay_for_blur, tuple(kernel.tolist()), 0)
-        overlay = cv2.GaussianBlur(overlay, tuple(kernel.tolist()), 0)
-        overlay[nan_mask] = np.nan
-
     overlay_colored = apply_colormap(overlay, cmap)
-    
+
     if overlay_only:
         blended_img = overlay_colored
     else:
         img = wsi.read_region((0, 0), vis_level, wsi.level_dimensions[vis_level]).convert("RGB")
         img = img.resize(region_size, resample=Image.Resampling.BICUBIC)
         img = np.array(img)
-        
+
         blended_img = cv2.addWeighted(img, 0.6, overlay_colored, 0.4, 0)
-    
+
     blended_img = Image.fromarray(blended_img)
 
     os.makedirs(output_dir, exist_ok=True)
@@ -170,7 +155,7 @@ def visualize_heatmap(
     blended_img.save(heatmap_path)
 
     if num_top_patches_to_save > 0:
-        topk_dir = os.path.join(output_dir, topk_dir_name)
+        topk_dir = os.path.join(output_dir, "topk_patches")
         os.makedirs(topk_dir, exist_ok=True)
         topk_indices = np.argsort(scores)[-num_top_patches_to_save:]
         for idx, i in enumerate(topk_indices):

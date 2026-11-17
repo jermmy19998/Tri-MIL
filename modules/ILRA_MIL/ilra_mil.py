@@ -14,6 +14,7 @@ class MultiHeadAttention(nn.Module):
     """
 
     def __init__(self, dim_Q, dim_K, dim_V, num_heads, ln=False, gated=False):
+        """Initialize the MultiHeadAttention instance and configure its dependencies."""
         super(MultiHeadAttention, self).__init__()
         self.dim_V = dim_V
         self.num_heads = num_heads
@@ -31,7 +32,7 @@ class MultiHeadAttention(nn.Module):
             self.gate = nn.Sequential(nn.Linear(dim_Q, dim_V), nn.SiLU())
 
     def forward(self, Q, K):
-
+        """Compute the MultiHeadAttention forward pass for the supplied input tensors."""
         Q0 = Q
 
         Q = self.fc_q(Q).transpose(0, 1)
@@ -40,9 +41,9 @@ class MultiHeadAttention(nn.Module):
         A, attn_weights = self.multihead_attn(Q, K, V)
 
         O = (Q + A).transpose(0, 1)
-        O = O if getattr(self, 'ln0', None) is None else self.ln0(O)
+        O = O if getattr(self, "ln0", None) is None else self.ln0(O)
         O = O + F.relu(self.fc_o(O))
-        O = O if getattr(self, 'ln1', None) is None else self.ln1(O)
+        O = O if getattr(self, "ln1", None) is None else self.ln1(O)
 
         if self.gate is not None:
             O = O.mul(self.gate(Q0))
@@ -56,13 +57,18 @@ class GAB(nn.Module):
     """
 
     def __init__(self, dim_in, dim_out, num_heads, num_inds, ln=False):
+        """Initialize the GAB instance and configure its dependencies."""
         super(GAB, self).__init__()
         self.latent = nn.Parameter(torch.Tensor(1, num_inds, dim_out))  # low-rank matrix L
 
         nn.init.xavier_uniform_(self.latent)
 
-        self.project_forward = MultiHeadAttention(dim_out, dim_in, dim_out, num_heads, ln=ln, gated=True)
-        self.project_backward = MultiHeadAttention(dim_in, dim_out, dim_out, num_heads, ln=ln, gated=True)
+        self.project_forward = MultiHeadAttention(
+            dim_out, dim_in, dim_out, num_heads, ln=ln, gated=True
+        )
+        self.project_backward = MultiHeadAttention(
+            dim_in, dim_out, dim_out, num_heads, ln=ln, gated=True
+        )
 
     def forward(self, X):
         """
@@ -71,15 +77,16 @@ class GAB(nn.Module):
         denoted as self-attention(X, X), which has a complexity of O(n^2).
         """
         latent_mat = self.latent.repeat(X.size(0), 1, 1)
-        H,_ = self.project_forward(latent_mat, X)  # project the high-dimensional X into low-dimensional H
-        X_hat,_ = self.project_backward(X, H)  # recover to high-dimensional space X_hat
+        H, _ = self.project_forward(
+            latent_mat, X
+        )  # project the high-dimensional X into low-dimensional H
+        X_hat, _ = self.project_backward(X, H)  # recover to high-dimensional space X_hat
 
         return X_hat
 
 
-
-
 def initialize_weights(model):
+    """Initialize weights."""
     for m in model.modules():
         if isinstance(m, nn.Linear):
             nn.init.xavier_normal_(m.weight)
@@ -89,6 +96,7 @@ def initialize_weights(model):
             nn.init.constant_(m.weight, 1)
             nn.init.constant_(m.bias, 0)
 
+
 class NLP(nn.Module):
     """
     To obtain global features for classification, Non-Local Pooling is a more effective method
@@ -96,28 +104,42 @@ class NLP(nn.Module):
     """
 
     def __init__(self, dim, num_heads, num_seeds, ln=False):
+        """Initialize the NLP instance and configure its dependencies."""
         super(NLP, self).__init__()
         self.S = nn.Parameter(torch.Tensor(1, num_seeds, dim))
         nn.init.xavier_uniform_(self.S)
         self.mha = MultiHeadAttention(dim, dim, dim, num_heads, ln=ln)
 
     def forward(self, X):
+        """Compute the NLP forward pass for the supplied input tensors."""
         global_embedding = self.S.repeat(X.size(0), 1, 1)
-        ret,attn_weights = self.mha(global_embedding, X)
-        return ret,attn_weights
+        ret, attn_weights = self.mha(global_embedding, X)
+        return ret, attn_weights
 
 
 class ILRA_MIL(nn.Module):
-    def __init__(self, num_layers=2, in_dim=768, num_classes=2, hidden_feat=256, num_heads=8, topk=1, ln=False):
+    def __init__(
+        self,
+        num_layers=2,
+        in_dim=768,
+        num_classes=2,
+        hidden_feat=256,
+        num_heads=8,
+        topk=1,
+        ln=False,
+    ):
+        """Initialize the ILRA_MIL instance and configure its dependencies."""
         super().__init__()
         # stack multiple GAB block
         gab_blocks = []
         for idx in range(num_layers):
-            block = GAB(dim_in=in_dim if idx == 0 else hidden_feat,
-                        dim_out=hidden_feat,
-                        num_heads=num_heads,
-                        num_inds=topk,
-                        ln=ln)
+            block = GAB(
+                dim_in=in_dim if idx == 0 else hidden_feat,
+                dim_out=hidden_feat,
+                num_heads=num_heads,
+                num_inds=topk,
+                ln=ln,
+            )
             gab_blocks.append(block)
 
         self.gab_blocks = nn.ModuleList(gab_blocks)
@@ -130,22 +152,22 @@ class ILRA_MIL(nn.Module):
 
         initialize_weights(self)
 
-    def forward(self, x, return_WSI_attn = False, return_WSI_feature = False):
+    def forward(self, x, return_WSI_attn=False, return_WSI_feature=False):
+        """Compute the ILRA_MIL forward pass for the supplied input tensors."""
         forward_return = {}
         for block in self.gab_blocks:
             x = block(x)
 
-        feat,attn_weights = self.pooling(x)
+        feat, attn_weights = self.pooling(x)
 
         feat = feat.squeeze(1)
         attn_weights = attn_weights.squeeze(1).transpose(0, 1)
         logits = self.classifier(feat)
         Y_hat = torch.topk(logits, 1, dim=1)[1]
         Y_prob = F.softmax(logits, dim=1)
-        forward_return['logits'] = logits
+        forward_return["logits"] = logits
         if return_WSI_feature:
-            forward_return['WSI_feature'] = feat
+            forward_return["WSI_feature"] = feat
         if return_WSI_attn:
-            forward_return['WSI_attn'] = attn_weights
+            forward_return["WSI_attn"] = attn_weights
         return forward_return
-    

@@ -1,0 +1,15 @@
+pytest>=8
+ruff>=0.9
+numpy
+pandas
+pyyaml
+addict
+scikit-learn
+h5py
+einops
+einops-exts
+timm>=0.9.16,<2
+tqdm
+matplotlib
+pytz
+ruamel.yaml
