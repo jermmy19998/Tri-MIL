@@ -26,7 +26,7 @@ def main():
     end = english.index("\n## ", start + 1)
     old_section = english[start:end]
     references = {}
-    method_column = 3 if '| Model | Configuration |' in old_section else 2
+    method_column = 3 if "| Model | Configuration |" in old_section else 2
     for line in old_section.splitlines():
         if not line.startswith("| `"):
             continue
